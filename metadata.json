@@ -1,0 +1,6 @@
+{
+  "name": "爆款种草图生成器",
+  "description": "手机原图一键生成小红书极具网感的场景图与文案",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
