@@ -45,6 +45,8 @@ async function startServer() {
       baseUrl = "https://api.apimart.ai/v1";
     }
 
+    console.log(`[AI Client] Initializing with key ending in ...${key.slice(-4)} at ${baseUrl}`);
+
     return new OpenAI({
       apiKey: key,
       baseURL: baseUrl
@@ -58,6 +60,8 @@ async function startServer() {
     if (baseUrl && baseUrl.includes("docs.apimart.ai")) {
       baseUrl = "https://api.apimart.ai/v1";
     }
+
+    console.log(`[OpenAI Client] Initializing for image gen with key ending in ...${key.slice(-4)} at ${baseUrl}`);
 
     return new OpenAI({
       apiKey: key,
@@ -133,25 +137,31 @@ async function startServer() {
       console.log(`[1/4] 开始流式处理，预设描述: ${description}, 数量: ${count}, 比例: ${aspectRatio}`);
 
       const referenceImageUrls = files.map(file => `data:${file.mimetype};base64,${file.buffer.toString("base64")}`);
+      const publicImageUrls: string[] = [];
       
       try {
         const uploadPromises = files.map(async (file, index) => {
-          const blob = new Blob([file.buffer], { type: file.mimetype });
-          const form = new FormData();
-          form.append('file', blob, 'image.jpg');
-          const uploadRes = await fetch('https://tmpfiles.org/api/v1/upload', {
-             method: 'POST',
-             body: form
-          });
-          const uploadJson = await uploadRes.json();
-          if (uploadJson?.data?.url) {
-             referenceImageUrls[index] = uploadJson.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/');
-             console.log(`[Image Cache] Uploaded inline reference image ${index} to: ${referenceImageUrls[index]}`);
+          try {
+            const blob = new Blob([file.buffer], { type: file.mimetype });
+            const form = new FormData();
+            form.append('file', blob, 'image.jpg');
+            const uploadRes = await fetch('https://tmpfiles.org/api/v1/upload', {
+               method: 'POST',
+               body: form
+            });
+            const uploadJson = await uploadRes.json();
+            if (uploadJson?.data?.url) {
+               const directUrl = uploadJson.data.url.replace('tmpfiles.org/', 'tmpfiles.org/dl/');
+               publicImageUrls.push(directUrl);
+               console.log(`[Image Cache] Uploaded reference image ${index} to: ${directUrl}`);
+            }
+          } catch (err) {
+            console.warn(`[Image Cache] Failed to upload image ${index} to tmpfiles:`, err);
           }
         });
         await Promise.all(uploadPromises);
       } catch (e) {
-        console.error("Failed to upload reference images to tmpfiles", e);
+        console.error("Failed to process reference images uploads", e);
       }
       
       // Step 1: Image Analysis Report
@@ -359,9 +369,42 @@ ${report}
           const defaultModel = isApimart ? "gpt-image-2" : "dall-e-3";
           const modelName = process.env.OPENAI_MODEL || defaultModel;
 
-          const finalPrompt = `RAW photo, smartphone photography style. Extremely high quality, ${resolution} resolution concept. ${promptItem.scene_prompt} --ar ${aspectRatio.replace(':', ':')} --v 6.0 --iw 2.0`;
+          // For Midjourney style (gpt-image-2), we often need to prepend image URLs to the prompt
+          let finalPrompt = "";
+          const isMjModel = modelName.includes("gpt-image") || modelName.includes("mj") || modelName.includes("midjourney");
+          
+          if (isMjModel) {
+            const imageRefs = publicImageUrls.length > 0 ? publicImageUrls.join(" ") + " " : "";
+            finalPrompt = `${imageRefs}${promptItem.scene_prompt} RAW photo, smartphone photography, high resolution --ar ${aspectRatio.replace(':', ':')} --v 6.0 --stylize 250`;
+          } else {
+            finalPrompt = `${promptItem.scene_prompt}. Style: high resolution lifestyle photography, aspect ratio ${aspectRatio}.`;
+          }
+
+          console.log(`[Generation ${i}] Model: ${modelName}, Prompt: ${finalPrompt.slice(0, 100)}...`);
 
           sendEvent({ type: "image_start", index: i, caption: promptItem.caption });
+
+          const body: any = {
+            model: modelName,
+            prompt: finalPrompt,
+            n: 1,
+            style: "vivid"
+          };
+
+          // Only add size if NOT an MJ-style model as it's handled by --ar
+          if (!isMjModel) {
+            body.size = dallexSize;
+          }
+
+          // Add references anyway for APIs that support it
+          if (publicImageUrls.length > 0) {
+            body.images = publicImageUrls;
+            body.image = publicImageUrls[0];
+          } else if (referenceImageUrls.length > 0) {
+            // Fallback to data URIs if public upload failed, though some APIs might reject this
+            body.images = referenceImageUrls.slice(0, 1); 
+            body.image = referenceImageUrls[0];
+          }
 
           const response = await fetch(`${baseUrl.replace(/\/$/, '')}/images/generations`, {
              method: "POST",
@@ -369,14 +412,7 @@ ${report}
                 "Authorization": `Bearer ${innerOpenai.apiKey}`,
                 "Content-Type": "application/json"
              },
-             body: JSON.stringify({
-                model: modelName,
-                prompt: finalPrompt,
-                image: referenceImageUrls,
-                n: 1,
-                size: dallexSize,
-                style: "vivid"
-             })
+             body: JSON.stringify(body)
           });
           
           if (!response.ok) {
