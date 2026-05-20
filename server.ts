@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import cors from "cors";
-import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import { createServer as createViteServer } from "vite";
 import "dotenv/config";
@@ -16,14 +15,12 @@ const imageCache = new Map<string, { buffer: Buffer, mimetype: string }>();
 
 async function startServer() {
   const app = express();
-  const PORT = 3000; // FORCE 3000 for AI Studio compatibility
+  const PORT = 3000;
 
   app.use((req, res, next) => {
-    console.log(`REQ: ${req.method} ${req.url}`);
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     next();
   });
-
-  app.use(cors());
 
   const openaiKeys = [
     "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ",
@@ -42,30 +39,30 @@ async function startServer() {
 
   function getAiClient() {
     const key = process.env.GEMINI_API_KEY || geminiKeys[gemIndex++ % geminiKeys.length];
-    let baseUrl = process.env.GEMINI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai" : undefined);
+    let baseUrl = process.env.GEMINI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai/v1" : undefined);
     
-    // Sanitize in case user provided documentation URL
     if (baseUrl && baseUrl.includes("docs.apimart.ai")) {
-      baseUrl = "https://api.apimart.ai";
+      baseUrl = "https://api.apimart.ai/v1";
     }
 
-    const additionalOptions: any = { httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } };
-    if (baseUrl) additionalOptions.httpOptions.baseUrl = baseUrl;
-    return new GoogleGenAI({ apiKey: key, ...additionalOptions });
+    return new OpenAI({
+      apiKey: key,
+      baseURL: baseUrl
+    });
   }
 
   function getOpenAiClient() {
     const key = process.env.OPENAI_API_KEY || openaiKeys[oaiIndex++ % openaiKeys.length];
     let baseUrl = process.env.OPENAI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai/v1" : undefined);
     
-    // Sanitize in case user provided documentation URL
     if (baseUrl && baseUrl.includes("docs.apimart.ai")) {
       baseUrl = "https://api.apimart.ai/v1";
     }
 
-    const additionalOptions: any = {};
-    if (baseUrl) additionalOptions.baseURL = baseUrl;
-    return new OpenAI({ apiKey: key, ...additionalOptions });
+    return new OpenAI({
+      apiKey: key,
+      baseURL: baseUrl
+    });
   }
 
   // Diagnostic Endpoint
@@ -135,13 +132,7 @@ async function startServer() {
 
       console.log(`[1/4] 开始流式处理，预设描述: ${description}, 数量: ${count}, 比例: ${aspectRatio}`);
 
-      let referenceImageUrls: string[] = [];
-      const inlineDataParts = files.map((file) => {
-        const base64Image = file.buffer.toString("base64");
-        const b64DataUri = `data:${file.mimetype};base64,${base64Image}`;
-        referenceImageUrls.push(b64DataUri);
-        return { inlineData: { data: base64Image, mimeType: file.mimetype } };
-      });
+      const referenceImageUrls = files.map(file => `data:${file.mimetype};base64,${file.buffer.toString("base64")}`);
       
       try {
         const uploadPromises = files.map(async (file, index) => {
@@ -212,21 +203,24 @@ async function startServer() {
 推荐镜头语言：[如：iPhone 15 Pro 广角俯拍 / 2倍人像模式手持特写]
 特殊需求：${description}`;
 
-      const response1 = await ai.models.generateContent({
+      const response1 = await ai.chat.completions.create({
         model: "gemini-3-flash-preview",
-        contents: [
+        messages: [
           {
             role: "user",
-            parts: [
-              { text: prompt1 },
-              ...inlineDataParts
+            content: [
+              { type: "text", text: prompt1 },
+              ...files.map(file => ({
+                type: "image_url" as const,
+                image_url: { url: `data:${file.mimetype};base64,${file.buffer.toString("base64")}` }
+              }))
             ]
           }
         ]
       });
 
       if (isCancelled) return res.end();
-      const report = response1.text || "";
+      const report = response1.choices[0]?.message?.content || "";
       console.log("[2/4] 解析报告生成完毕，正在构建分屏分镜与文案...");
 
       sendEvent({ type: "progress", progress: 30, message: "正在构建手账风分屏镜头语言与网感文案..." });
@@ -269,15 +263,15 @@ ${report}
       `;
 
       const [res2, res3] = await Promise.all([
-        ai.models.generateContent({ 
+        ai.chat.completions.create({ 
            model: "gemini-3-flash-preview", 
-           contents: prompt2,
-           config: { maxOutputTokens: 8192 }
+           messages: [{ role: "user", content: prompt2 }],
+           max_tokens: 4096
         }),
-        ai.models.generateContent({ 
+        ai.chat.completions.create({ 
            model: "gemini-3-flash-preview", 
-           contents: prompt3,
-           config: { maxOutputTokens: 8192 }
+           messages: [{ role: "user", content: prompt3 }],
+           max_tokens: 4096
         })
       ]);
 
@@ -286,7 +280,7 @@ ${report}
       // Parse Copywriting
       let copywriting = [];
       try {
-        let cwText = (res3.text || "[]").replace(/```json/g, "").replace(/```/g, "").trim();
+        let cwText = (res3.choices[0]?.message?.content || "[]").replace(/```json/g, "").replace(/```/g, "").trim();
         copywriting = JSON.parse(cwText);
         sendEvent({ type: "copywriting", data: copywriting });
       } catch (e) {
@@ -296,7 +290,7 @@ ${report}
       // Parse Image Prompts
       let imagePrompts = [];
       try {
-        const text = res2.text || "";
+        const text = res2.choices[0]?.message?.content || "";
         const screens = text.split(/【第\d+屏】|第\d+屏[:：]|#\s*第\d+屏/).map(s => s.trim()).filter(s => s.length > 5);
         
         let validScreens = screens;
