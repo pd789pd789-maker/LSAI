@@ -4,8 +4,12 @@ import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import { createServer as createViteServer } from "vite";
+import "dotenv/config";
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB limit
+});
 
 const imageCache = new Map<string, { buffer: Buffer, mimetype: string }>();
 
@@ -32,12 +36,17 @@ async function startServer() {
   let gemIndex = 0;
 
   function getAiClient() {
-    // If using APIMart, we must use APIMart's keys otherwise it rejects the AI Studio platform injected key
-    const useApimart = !process.env.GEMINI_BASE_URL || process.env.GEMINI_BASE_URL.includes("apimart");
-    const key = useApimart ? geminiKeys[gemIndex++ % geminiKeys.length] : (process.env.GEMINI_API_KEY || geminiKeys[gemIndex++ % geminiKeys.length]);
-    
-    const additionalOptions: any = { httpOptions: {} };
-    const baseUrl = process.env.GEMINI_BASE_URL || "https://api.apimart.ai"; // the genai SDK handles the /v1beta internally usually, but apimart expects the full URL minus /v1beta
+    const key = process.env.GEMINI_API_KEY || geminiKeys[gemIndex++ % geminiKeys.length];
+    // APIMart usually expects the base URL to NOT include /v1beta
+    const baseUrl = process.env.GEMINI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai" : undefined);
+
+    const additionalOptions: any = { 
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      } 
+    };
     if (baseUrl) {
        additionalOptions.httpOptions.baseUrl = baseUrl;
     }
@@ -45,16 +54,25 @@ async function startServer() {
   }
 
   function getOpenAiClient() {
-    const useApimart = !process.env.OPENAI_BASE_URL || process.env.OPENAI_BASE_URL.includes("apimart");
-    const key = useApimart ? openaiKeys[oaiIndex++ % openaiKeys.length] : (process.env.OPENAI_API_KEY || openaiKeys[oaiIndex++ % openaiKeys.length]);
-    
+    const key = process.env.OPENAI_API_KEY || openaiKeys[oaiIndex++ % openaiKeys.length];
+    const baseUrl = process.env.OPENAI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai/v1" : undefined);
+
     const additionalOptions: any = {};
-    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.apimart.ai/v1";
     if (baseUrl) {
        additionalOptions.baseURL = baseUrl;
     }
     return new OpenAI({ apiKey: key, ...additionalOptions });
   }
+
+  // Diagnostic Endpoint
+  app.get("/api/health", (req, res) => {
+    res.json({ 
+      status: "ok", 
+      env: process.env.NODE_ENV,
+      hasGeminiKey: !!process.env.GEMINI_API_KEY,
+      hasOpenAIKey: !!process.env.OPENAI_API_KEY
+    });
+  });
 
   app.get("/api/uploads/:id", (req, res) => {
     const data = imageCache.get(req.params.id);
@@ -192,7 +210,7 @@ async function startServer() {
 特殊需求：${description}`;
 
       const response1 = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash",
         contents: [
           {
             role: "user",
@@ -249,12 +267,12 @@ ${report}
 
       const [res2, res3] = await Promise.all([
         ai.models.generateContent({ 
-           model: "gemini-3-flash-preview", 
+           model: "gemini-3.5-flash", 
            contents: prompt2,
            config: { maxOutputTokens: 8192 }
         }),
         ai.models.generateContent({ 
-           model: "gemini-3-flash-preview", 
+           model: "gemini-3.5-flash", 
            contents: prompt3,
            config: { maxOutputTokens: 8192 }
         })
@@ -339,7 +357,10 @@ ${report}
         let errMsg = "";
         try {
           const innerOpenai = getOpenAiClient(); // Round-robin key for each parallel request!
-          const baseUrl = process.env.OPENAI_BASE_URL || "https://api.apimart.ai/v1";
+          const baseUrl = innerOpenai.baseURL;
+          const isApimart = baseUrl.includes("apimart");
+          const defaultModel = isApimart ? "gpt-image-2" : "dall-e-3";
+          const modelName = process.env.OPENAI_MODEL || defaultModel;
 
           const finalPrompt = `RAW photo, smartphone photography style. Extremely high quality, ${resolution} resolution concept. ${promptItem.scene_prompt} --ar ${aspectRatio.replace(':', ':')} --v 6.0 --iw 2.0`;
 
@@ -352,7 +373,7 @@ ${report}
                 "Content-Type": "application/json"
              },
              body: JSON.stringify({
-                model: "gpt-image-2",
+                model: modelName,
                 prompt: finalPrompt,
                 image: referenceImageUrls,
                 n: 1,

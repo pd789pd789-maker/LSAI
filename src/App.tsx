@@ -277,7 +277,11 @@ export default function App() {
       }
 
       if (!response.ok) {
-        throw new Error("服务请求失败");
+        let errDetails = "";
+        try {
+           errDetails = ` (${response.status} ${response.statusText} - ${await response.text()})`;
+        } catch (e) {}
+        throw new Error("服务请求失败" + errDetails);
       }
 
       if (!response.body) throw new Error("No response body");
