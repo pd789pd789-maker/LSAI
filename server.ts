@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import multer from "multer";
+import cors from "cors";
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import { createServer as createViteServer } from "vite";
@@ -15,10 +16,14 @@ const imageCache = new Map<string, { buffer: Buffer, mimetype: string }>();
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 3000; // FORCE 3000 for AI Studio compatibility
 
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  app.use((req, res, next) => {
+    console.log(`REQ: ${req.method} ${req.url}`);
+    next();
+  });
+
+  app.use(cors());
 
   const openaiKeys = [
     "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ",
@@ -37,42 +42,40 @@ async function startServer() {
 
   function getAiClient() {
     const key = process.env.GEMINI_API_KEY || geminiKeys[gemIndex++ % geminiKeys.length];
-    // APIMart usually expects the base URL to NOT include /v1beta
-    const baseUrl = process.env.GEMINI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai" : undefined);
-
-    const additionalOptions: any = { 
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      } 
-    };
-    if (baseUrl) {
-       additionalOptions.httpOptions.baseUrl = baseUrl;
+    let baseUrl = process.env.GEMINI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai" : undefined);
+    
+    // Sanitize in case user provided documentation URL
+    if (baseUrl && baseUrl.includes("docs.apimart.ai")) {
+      baseUrl = "https://api.apimart.ai";
     }
+
+    const additionalOptions: any = { httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } };
+    if (baseUrl) additionalOptions.httpOptions.baseUrl = baseUrl;
     return new GoogleGenAI({ apiKey: key, ...additionalOptions });
   }
 
   function getOpenAiClient() {
     const key = process.env.OPENAI_API_KEY || openaiKeys[oaiIndex++ % openaiKeys.length];
-    const baseUrl = process.env.OPENAI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai/v1" : undefined);
+    let baseUrl = process.env.OPENAI_BASE_URL || (key.startsWith("sk-") ? "https://api.apimart.ai/v1" : undefined);
+    
+    // Sanitize in case user provided documentation URL
+    if (baseUrl && baseUrl.includes("docs.apimart.ai")) {
+      baseUrl = "https://api.apimart.ai/v1";
+    }
 
     const additionalOptions: any = {};
-    if (baseUrl) {
-       additionalOptions.baseURL = baseUrl;
-    }
+    if (baseUrl) additionalOptions.baseURL = baseUrl;
     return new OpenAI({ apiKey: key, ...additionalOptions });
   }
 
   // Diagnostic Endpoint
   app.get("/api/health", (req, res) => {
-    res.json({ 
-      status: "ok", 
-      env: process.env.NODE_ENV,
-      hasGeminiKey: !!process.env.GEMINI_API_KEY,
-      hasOpenAIKey: !!process.env.OPENAI_API_KEY
-    });
+    console.log("Health check hit");
+    res.json({ status: "ok", time: new Date().toISOString() });
   });
+
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   app.get("/api/uploads/:id", (req, res) => {
     const data = imageCache.get(req.params.id);
@@ -210,7 +213,7 @@ async function startServer() {
 特殊需求：${description}`;
 
       const response1 = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+        model: "gemini-3-flash-preview",
         contents: [
           {
             role: "user",
@@ -267,12 +270,12 @@ ${report}
 
       const [res2, res3] = await Promise.all([
         ai.models.generateContent({ 
-           model: "gemini-3.5-flash", 
+           model: "gemini-3-flash-preview", 
            contents: prompt2,
            config: { maxOutputTokens: 8192 }
         }),
         ai.models.generateContent({ 
-           model: "gemini-3.5-flash", 
+           model: "gemini-3-flash-preview", 
            contents: prompt3,
            config: { maxOutputTokens: 8192 }
         })
@@ -463,6 +466,13 @@ ${report}
     }
   });
 
+  // Catch-all for API routes to handle 405 or 404 explicitly
+  app.all("/api/*", (req, res, next) => {
+    // If we reach here, it means no previous API route matched
+    console.warn(`[NOT_FOUND] ${req.method} ${req.url}`);
+    res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.url}` });
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -483,7 +493,7 @@ ${report}
         console.error('API Error:', err);
         // For SSE if headers are already sent
         if (res.headersSent) {
-           res.write(`data: ${JSON.stringify({ type: "error", message: err.message || "Unknown error" })}\n\n`);
+           res.write(JSON.stringify({ type: "error", message: err.message || "Unknown error" }) + "\n");
            return res.end();
         }
         res.status(500).json({ error: err.message || "Internal server error" });
