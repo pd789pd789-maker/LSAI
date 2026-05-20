@@ -54,15 +54,16 @@ export default function App() {
   };
 
   const updateCurrentGroupInLibrary = (group: ImageGroup) => {
+    const safeGroup = { ...group, results: group.results.filter(Boolean) };
     setLibrary(prev => {
-      const idx = prev.findIndex(g => g.id === group.id);
+      const idx = prev.findIndex(g => g.id === safeGroup.id);
       if (idx !== -1) {
         const newLib = [...prev];
-        newLib[idx] = group;
+        newLib[idx] = safeGroup;
         localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
         return newLib;
       } else {
-        const newLib = [group, ...prev];
+        const newLib = [safeGroup, ...prev];
         localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
         return newLib;
       }
@@ -81,7 +82,7 @@ export default function App() {
     if (!folder) return;
 
     for (let i = 0; i < group.results.length; i++) {
-      const imgUrl = group.results[i].imageUrl;
+      const imgUrl = group.results[i]?.imageUrl;
       if (imgUrl) {
         try {
           const response = await fetch(imgUrl);
@@ -136,7 +137,7 @@ export default function App() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const files = Array.from(e.target.files);
-      const newFiles = [...selectedFiles, ...files].slice(0, 9);
+      const newFiles = [...selectedFiles, ...files].slice(0, 50);
       setSelectedFiles(newFiles);
       setPreviewUrls(newFiles.map(f => URL.createObjectURL(f)));
       setCurrentGroup(null);
@@ -149,7 +150,7 @@ export default function App() {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const files = Array.from(e.dataTransfer.files);
-      const newFiles = [...selectedFiles, ...files].slice(0, 9);
+      const newFiles = [...selectedFiles, ...files].slice(0, 50);
       setSelectedFiles(newFiles);
       setPreviewUrls(newFiles.map(f => URL.createObjectURL(f)));
       setCurrentGroup(null);
@@ -213,10 +214,48 @@ export default function App() {
     };
     setCurrentGroup(initialGroup);
 
+    const compressImage = (file: File): Promise<File> => {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.src = URL.createObjectURL(file);
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          let { width, height } = img;
+          const maxDim = 800;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = (height / width) * maxDim;
+              width = maxDim;
+            } else {
+              width = (width / height) * maxDim;
+              height = maxDim;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+              if (blob) {
+                resolve(new File([blob], file.name, { type: "image/jpeg" }));
+              } else {
+                resolve(file);
+              }
+            }, "image/jpeg", 0.7);
+          } else {
+            resolve(file);
+          }
+        };
+        img.onerror = () => resolve(file);
+      });
+    };
+
     abortControllerRef.current = new AbortController();
 
     const formData = new FormData();
-    selectedFiles.forEach(file => {
+    const compressedFiles = await Promise.all(selectedFiles.map(compressImage));
+    compressedFiles.forEach(file => {
       formData.append("images", file);
     });
     formData.append("description", description);
@@ -234,7 +273,7 @@ export default function App() {
 
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("text/html")) {
-        throw new Error("登录会话已过期，请刷新页面重新连接。");
+        throw new Error("服务请求超时或响应异常，请尝试减少上传图片数量或刷新页面重试。");
       }
 
       if (!response.ok) {
@@ -285,7 +324,7 @@ export default function App() {
                    setGeneratingImages(currentGenImages);
                    const newResults = [...(finalGroup.results || [])];
                    newResults[event.index] = event.data;
-                   finalGroup.results = newResults.filter(Boolean);
+                   finalGroup.results = newResults;
                    setCurrentGroup({...finalGroup});
                 } else if (event.type === "error") {
                    setErrorMsg(event.message);
@@ -293,6 +332,8 @@ export default function App() {
                    return;
                 } else if (event.type === "done") {
                    setIsGenerating(false);
+                   finalGroup.results = finalGroup.results.filter(Boolean);
+                   setCurrentGroup({...finalGroup});
                    updateCurrentGroupInLibrary(finalGroup);
                 }
              } catch (e) {
@@ -311,10 +352,12 @@ export default function App() {
             } else if (event.type === "image") {
                const newResults = [...(finalGroup.results || [])];
                newResults[event.index] = event.data;
-               finalGroup.results = newResults.filter(Boolean);
+               finalGroup.results = newResults;
                setCurrentGroup({...finalGroup});
             } else if (event.type === "done") {
                setIsGenerating(false);
+               finalGroup.results = finalGroup.results.filter(Boolean);
+               setCurrentGroup({...finalGroup});
                updateCurrentGroupInLibrary(finalGroup);
             }
          } catch (e) {
@@ -689,7 +732,9 @@ export default function App() {
                       {/* Display Grid */}
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-5">
                         <AnimatePresence>
-                          {currentGroup.results.map((item, idx) => (
+                          {currentGroup.results.map((item, idx) => {
+                            if (!item) return null;
+                            return (
                             <motion.div 
                                initial={{ opacity: 0, scale: 0.95 }}
                                animate={{ opacity: 1, scale: 1 }}
@@ -712,7 +757,7 @@ export default function App() {
                                       <Download className="w-3.5 h-3.5" />
                                     </button>
                                     <button 
-                                      onClick={() => setPreviewState({ images: currentGroup.results.map(r => r.imageUrl || ""), index: idx })}
+                                      onClick={() => setPreviewState({ images: currentGroup.results.filter(Boolean).map(r => r.imageUrl || ""), index: idx })}
                                       className="bg-white/90 p-2 rounded-full hover:bg-white shadow text-[#111] active:scale-90 transition-transform"
                                       title="鉴赏全图"
                                     >
@@ -721,7 +766,8 @@ export default function App() {
                                   </div>
                                </div>
                             </motion.div>
-                          ))}
+                            );
+                          })}
                         </AnimatePresence>
                       </div>
 

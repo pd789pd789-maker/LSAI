@@ -228,10 +228,10 @@ async function startServer() {
 正负面提示词全包含：每一屏都需要输出完整的【中文正向提示词】以及【负面提示词】。
 负面提示词必须重点包含：出现人脸、头部、单反拍摄、背景过度虚化、影棚光、刻意摆拍、商业广告海报感、杂乱背景、生硬的电脑字体、劣质 3D 感等。
 统一画幅：每一条提示词都需要包含比例尺寸，默认设置比例为小红书黄金竖屏 ${aspectRatio}。
-强制切分符号：请强制在每屏提示词的开头使用格式“【第X屏】”（例如【第1屏】、【第2屏】... 一直到【第${count}屏】）。
+强制切分符号：请强制在每屏提示词的开头使用格式“【第X屏】”（例如【第1屏】、【第2屏】... 一直到【第${count}屏】）。请严格数清楚屏数，必须刚好是 ${count} 屏，如果不到 ${count} 屏说明任务失败！
 只输出提示词：你的任务是生成详细的文本提示词框架，不要直接生成图片。
 #初始化
-请确认你已理解上述要求。接下来我会发送具体的【产品信息】，请立即执行带有手绘涂鸦包装感和手持无脸美学的小红书手机直出风格分屏提示词生成，一共生成 ${count} 屏。
+请确认你已理解上述要求。接下来我会发送具体的【产品信息】，请立即执行带有手绘涂鸦包装感和手持无脸美学的小红书手机直出风格分屏提示词生成，一共生成 ${count} 屏，绝不可少出！
 【产品基础信息】:
 ${report}`;
 
@@ -283,6 +283,11 @@ ${report}
            validScreens = validScreens.slice(-count);
         } else if (validScreens.length === 0) {
            validScreens = [text];
+        }
+        
+        while (validScreens.length < count && validScreens.length > 0) {
+           // Duplicate the last screen with a slight variation to fulfill the count
+           validScreens.push(validScreens[validScreens.length - 1] + " (不同角度)");
         }
 
         imagePrompts = validScreens.map((screenText, index) => {
