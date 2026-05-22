@@ -31,9 +31,70 @@ type ImageGroup = {
   copywriting?: Copywriting[];
 };
 
+type User = {
+  email: string;
+  points: number;
+};
+
 export default function App() {
   const [currentView, setCurrentView] = useState<'home' | 'workspace'>('home');
-  const [tab, setTab] = useState<'generate' | 'library'>('generate');
+  const [tab, setTab] = useState<'generate' | 'library' | 'admin'>('generate');
+  
+  // Auth State
+  const [token, setToken] = useState<string | null>(localStorage.getItem("AUTH_TOKEN"));
+  const [user, setUser] = useState<User | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  const fetchMe = async (currentToken: string) => {
+    try {
+      const res = await fetch("/api/auth/me", {
+        headers: { "Authorization": `Bearer ${currentToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data);
+      } else {
+        setToken(null);
+        setUser(null);
+        localStorage.removeItem("AUTH_TOKEN");
+      }
+    } catch(e) {
+      console.error("Fetch me failed:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (token) {
+      fetchMe(token);
+    }
+  }, [token]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem("AUTH_TOKEN", data.token);
+        setShowLoginModal(false);
+        setCurrentView('workspace');
+      } else {
+        setLoginError(data.message || "登录失败");
+      }
+    } catch(e: any) {
+      setLoginError(e.message || "登录失败");
+    }
+  };
   
   // Library State
   const [library, setLibrary] = useState<ImageGroup[]>([]);
@@ -275,12 +336,23 @@ export default function App() {
       formData.append("resolution", resolution);
       formData.append("count", count.toString());
 
+      const headers: Record<string, string> = { "Accept": "text/event-stream" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const response = await fetch("/api/generate-images", {
         method: "POST",
-        headers: { "Accept": "text/event-stream" },
+        headers,
         body: formData,
         signal: abortControllerRef.current.signal
       });
+
+      if (response.status === 401) {
+        setToken(null);
+        setUser(null);
+        localStorage.removeItem("AUTH_TOKEN");
+        setShowLoginModal(true);
+        throw new Error("登录已过期或积分验证失败，请重新登录");
+      }
 
       const contentType = response.headers.get("content-type");
       if (contentType && contentType.includes("text/html")) {
@@ -332,6 +404,8 @@ export default function App() {
                 } else if (event.type === "copywriting") {
                    finalGroup.copywriting = event.data;
                    setCurrentGroup({...finalGroup});
+                } else if (event.type === "points_update") {
+                   setUser(prev => prev ? { ...prev, points: event.data.points } : null);
                 } else if (event.type === "image") {
                    currentGenImages = {
                       ...currentGenImages,
@@ -441,7 +515,13 @@ export default function App() {
             transition={{ delay: 0.8, duration: 0.6 }}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            onClick={() => setCurrentView('workspace')}
+            onClick={() => {
+              if (user) {
+                setCurrentView('workspace');
+              } else {
+                setShowLoginModal(true);
+              }
+            }}
             className="group relative inline-flex items-center justify-center gap-3 bg-white text-black px-8 md:px-10 py-4 md:py-5 rounded-full font-bold text-base md:text-lg transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.2)] hover:shadow-[0_0_60px_rgba(255,36,66,0.4)] border border-transparent"
           >
             {isGenerating ? (
@@ -451,12 +531,41 @@ export default function App() {
               </>
             ) : (
               <>
-                 进入美学工作室
+                 进入美学工作室 (内测版)
                  <ArrowRight className="w-5 h-5 md:w-6 md:h-6 group-hover:translate-x-1 transition-transform" />
               </>
             )}
           </motion.button>
         </motion.div>
+
+        {showLoginModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }} 
+              animate={{ opacity: 1, scale: 1 }} 
+              className="bg-white text-black rounded-2xl w-full max-w-sm p-6 relative"
+            >
+              <button onClick={() => setShowLoginModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-black">
+                <X className="w-5 h-5" />
+              </button>
+              <h2 className="text-xl font-bold mb-2">内测登录</h2>
+              <p className="text-xs text-gray-500 mb-6">请输入后台为您分配的内测账号和密码</p>
+              
+              <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">邮箱</label>
+                  <input type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#FF2442]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">密码</label>
+                  <input type="password" required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#FF2442]" />
+                </div>
+                {loginError && <p className="text-xs text-red-500">{loginError}</p>}
+                <button type="submit" className="w-full bg-[#111] text-white py-2.5 rounded-lg text-sm font-bold mt-2 hover:bg-[#FF2442] transition-colors">确认登录</button>
+              </form>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   }
@@ -498,22 +607,53 @@ export default function App() {
             <FolderOpen className={cn("w-5 h-5", tab === 'library' ? "text-white" : "text-gray-400 group-hover:text-gray-600")} />
             <span className="text-sm">我的灵感库</span>
           </button>
+
+          {user && user.email === 'admin@admin.com' && (
+            <button 
+              onClick={() => setTab('admin')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-medium transition-all group",
+                tab === 'admin' ? "bg-[#111] text-white shadow-lg" : "text-gray-600 hover:bg-gray-100"
+              )}
+            >
+              <Settings2 className={cn("w-5 h-5", tab === 'admin' ? "text-white" : "text-gray-400 group-hover:text-gray-600")} />
+              <span className="text-sm">后台管理</span>
+            </button>
+          )}
         </nav>
 
-        <div className="p-6">
+        <div className="p-6 flex flex-col gap-3">
+          {user && (
+            <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-center">
+              <p className="text-[10px] text-gray-500 mb-1">当前账户</p>
+              <p className="text-xs font-semibold text-[#111] mb-2 truncate">{user.email}</p>
+              <div className="bg-white border border-red-100 text-[#FF2442] font-mono text-lg font-bold py-1.5 rounded-lg">
+                {user.points} 积分
+              </div>
+            </div>
+          )}
           <button 
-            onClick={() => setCurrentView('home')}
-            className="w-full flex justify-center items-center gap-2 py-3 rounded-xl border border-gray-200 text-xs font-semibold text-gray-500 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+            onClick={() => {
+              setToken(null);
+              setUser(null);
+              localStorage.removeItem("AUTH_TOKEN");
+              setCurrentView('home');
+            }}
+            className="w-full flex justify-center items-center gap-2 py-3 rounded-xl border border-gray-200 text-xs font-semibold text-gray-500 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
           >
-            <Home className="w-4 h-4" /> 离开工作室
+             退出登录
           </button>
         </div>
       </aside>
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative pb-16 md:pb-0">
-        <header className="h-14 md:h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center px-4 md:px-8 z-10 sticky top-0">
-          <h2 className="font-bold text-base md:text-lg">{tab === 'generate' ? '光影美学引擎 - 生活方式' : '灵感作品素材库'}</h2>
+        <header className="h-14 md:h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center justify-between px-4 md:px-8 z-10 sticky top-0">
+          <h2 className="font-bold text-base md:text-lg">{tab === 'generate' ? '光影美学引擎 - 生活方式' : tab === 'library' ? '灵感作品素材库' : '后台管理面板'}</h2>
+          
+          <div className="md:hidden flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-full border border-red-100 text-[#FF2442] text-xs font-bold font-mono">
+            {user?.points || 0} 积分
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-8">
@@ -926,6 +1066,11 @@ export default function App() {
               )}
             </div>
           )}
+          {tab === 'admin' && user && user.email === 'admin@admin.com' && (
+            <div className="h-full flex flex-col gap-6 max-w-4xl mx-auto w-full">
+              <AdminPanel token={token!} />
+            </div>
+          )}
         </div>
       </main>
 
@@ -1015,6 +1160,110 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function AdminPanel({ token }: { token: string }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingPoints, setEditingPoints] = useState<number>(0);
+
+  const fetchUsers = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/users", {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data);
+      }
+    } catch(e) {
+      console.error(e);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchUsers();
+  }, [token]);
+
+  const handleUpdatePoints = async (userId: string) => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "PUT",
+        headers: { 
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ userId, points: editingPoints })
+      });
+      if (res.ok) {
+        setEditingUserId(null);
+        fetchUsers();
+      }
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 shadow-sm md:shadow-md p-6 flex flex-col relative overflow-hidden flex-1">
+      <h3 className="font-bold text-lg md:text-xl text-[#111] tracking-tight mb-4 flex items-center justify-between">
+        用户积分管理
+        <button onClick={fetchUsers} className="text-gray-500 hover:text-black transition-colors rounded-full p-2 bg-gray-50 border border-gray-200">
+          <RefreshCcw className={cn("w-4 h-4", loading && "animate-spin")} />
+        </button>
+      </h3>
+      <div className="flex-1 overflow-auto rounded-xl border border-gray-100 bg-gray-50">
+        <table className="w-full text-left text-sm whitespace-nowrap">
+          <thead className="bg-gray-100 sticky top-0 uppercase text-xs font-semibold text-gray-500 tracking-wider">
+            <tr>
+              <th className="px-6 py-4">账号</th>
+              <th className="px-6 py-4">当前积分</th>
+              <th className="px-6 py-4">注册时间</th>
+              <th className="px-6 py-4 text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200 bg-white">
+            {users.map(u => (
+              <tr key={u._id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4 font-mono font-medium text-gray-900">{u.email}</td>
+                <td className="px-6 py-4">
+                  {editingUserId === u._id ? (
+                    <input 
+                      type="number" 
+                      value={editingPoints}
+                      onChange={e => setEditingPoints(parseInt(e.target.value) || 0)}
+                      className="w-24 px-2 py-1 border border-gray-300 rounded text-sm focus:border-red-400 focus:outline-none focus:ring-1 focus:ring-red-400"
+                    />
+                  ) : (
+                    <span className="font-bold text-red-500">{u.points}</span>
+                  )}
+                </td>
+                <td className="px-6 py-4 text-gray-500">
+                  {new Date(u.createdAt).toLocaleString()}
+                </td>
+                <td className="px-6 py-4 text-right">
+                  {editingUserId === u._id ? (
+                    <div className="flex items-center justify-end gap-2">
+                       <button onClick={() => setEditingUserId(null)} className="text-gray-500 hover:text-gray-700 font-medium">取消</button>
+                       <button onClick={() => handleUpdatePoints(u._id)} className="bg-[#111] hover:bg-black text-white px-3 py-1.5 rounded-lg font-bold">保存</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => { setEditingUserId(u._id); setEditingPoints(u.points); }} className="text-blue-500 hover:text-blue-700 font-bold">修改积分</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {users.length === 0 && !loading && (
+          <div className="text-center py-10 text-gray-400 text-sm">暂无用户</div>
+        )}
+      </div>
     </div>
   );
 }

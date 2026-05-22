@@ -71,3 +71,30 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
     res.status(500).json({ message: "服务器内部错误", error: err.message });
   }
 };
+
+export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const users = await User.find().select("-password").sort({ createdAt: -1 });
+    res.json(users);
+  } catch (err: any) {
+    res.status(500).json({ message: "服务器内部错误", error: err.message });
+  }
+};
+
+export const updateUserPoints = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { userId, points } = req.body;
+    if (typeof points !== 'number') {
+      res.status(400).json({ message: "无效的积分值" });
+      return;
+    }
+    const user = await User.findByIdAndUpdate(userId, { points }, { new: true }).select("-password");
+    if (!user) {
+      res.status(404).json({ message: "未找到该用户" });
+      return;
+    }
+    res.json(user);
+  } catch (err: any) {
+    res.status(500).json({ message: "服务器内部错误", error: err.message });
+  }
+};
