@@ -548,13 +548,7 @@ export default function App() {
               <button onClick={() => setShowLoginModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-black">
                 <X className="w-5 h-5" />
               </button>
-              <h2 className="text-xl font-bold mb-2">内测登录</h2>
-              <p className="text-xs text-gray-500 mb-2">请输入后台为您分配的内测账号和密码</p>
-              <div className="bg-gray-50 border border-gray-100 p-3 rounded-lg mb-6 text-xs text-gray-600 font-mono flex flex-col gap-1">
-                <div>Admin: admin@admin.com</div>
-                <div>User: user1@test.com ~ user5@test.com</div>
-                <div className="text-red-500 font-bold mt-1">统一内测密码: 123456</div>
-              </div>
+              <h2 className="text-xl font-bold mb-6">内测登录</h2>
               
               <form onSubmit={handleLogin} className="flex flex-col gap-4">
                 <div>
@@ -1214,8 +1208,53 @@ function AdminPanel({ token }: { token: string }) {
     }
   };
 
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { 
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email: newEmail, password: newPassword }),
+      });
+      if (res.ok) {
+        setNewEmail("");
+        setNewPassword("");
+        fetchUsers();
+        alert("账号创建成功");
+      } else {
+        const text = await res.json();
+        alert(text.message || "创建失败");
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
     <div className="bg-white rounded-2xl md:rounded-3xl border border-gray-100 shadow-sm md:shadow-md p-6 flex flex-col relative overflow-hidden flex-1">
+      <div className="mb-6 bg-gray-50 p-4 rounded-xl border border-gray-100">
+        <h4 className="font-bold text-sm mb-3">快捷创建内测账号</h4>
+        <form onSubmit={handleCreateUser} className="flex gap-3 items-end">
+          <div className="flex-1">
+            <label className="block text-xs text-gray-500 mb-1">邮箱地址</label>
+            <input type="email" required value={newEmail} onChange={e => setNewEmail(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-black" placeholder="user@example.com" />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs text-gray-500 mb-1">初始密码</label>
+            <input type="text" required value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-black" placeholder="至少6位" />
+          </div>
+          <button type="submit" className="bg-[#111] hover:bg-black text-white px-5 py-2.5 rounded-lg text-sm font-bold shadow-sm h-[38px] flex items-center justify-center">
+            开通账号
+          </button>
+        </form>
+      </div>
+
       <h3 className="font-bold text-lg md:text-xl text-[#111] tracking-tight mb-4 flex items-center justify-between">
         用户积分管理
         <button onClick={fetchUsers} className="text-gray-500 hover:text-black transition-colors rounded-full p-2 bg-gray-50 border border-gray-200">

@@ -99,3 +99,27 @@ export const updateUserPoints = async (req: AuthRequest, res: Response): Promise
     res.status(500).json({ message: "服务器内部错误", error: err.message });
   }
 };
+
+export const createUser = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+       res.status(400).json({ message: "请提供邮箱和密码" });
+       return;
+    }
+    
+    let user = await User.findOne({ email });
+    if (user) {
+      res.status(400).json({ message: "该用户已存在" });
+      return;
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    user = await User.create({ email, password: hashedPassword, points: 200 });
+    res.status(201).json(user);
+  } catch (err: any) {
+    res.status(500).json({ message: "服务器内部错误", error: err.message });
+  }
+};

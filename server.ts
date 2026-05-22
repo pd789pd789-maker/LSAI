@@ -69,11 +69,11 @@ async function startServer() {
 
     const defaultUsers = [
       { email: "admin@admin.com", password: hashedPassword, points: 999999999 },
-      { email: "user1@test.com", password: hashedPassword, points: 200 },
-      { email: "user2@test.com", password: hashedPassword, points: 200 },
-      { email: "user3@test.com", password: hashedPassword, points: 200 },
-      { email: "user4@test.com", password: hashedPassword, points: 200 },
-      { email: "user5@test.com", password: hashedPassword, points: 200 },
+      { email: "1@1.com", password: hashedPassword, points: 200 },
+      { email: "2@2.com", password: hashedPassword, points: 200 },
+      { email: "3@3.com", password: hashedPassword, points: 200 },
+      { email: "4@4.com", password: hashedPassword, points: 200 },
+      { email: "5@5.com", password: hashedPassword, points: 200 },
     ];
 
     for (const u of defaultUsers) {
@@ -344,7 +344,13 @@ ${report}
 
       const copyPrompt = `基于以下产品信息：
 ${report}
-生成3款不同风格小红书爆款标题和文案，JSON数组输出：[{"title": "...", "content": "..."}]`;
+生成3款不同风格小红书爆款标题和文案：
+1. 情绪价值拉满的感性种草风格
+2. 直接粗暴的干货合集风格
+3. 极度精简精辟、直击痛点、让人眼前一亮的短打金句风格（标题控制在8字以内，正文不超过3段，拒绝冗长）
+
+请务必直接输出JSON数组格式，不带markdown标签，格式如下：
+[{"title": "...", "content": "..."}]`;
 
       const uploadImageTask = async () => {
         let tempImageUrl = "";
