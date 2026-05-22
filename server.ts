@@ -104,15 +104,15 @@ async function startServer() {
   // Helper clients
   const defaultGeminiKeys = "sk-kvhOwF1zT9BNOPa90QH5YCGesNeW3DqvOY6tfRzYaouup3Dx,sk-LEhPYznQH24Gclagj2Dry9jNOaaPrTslt9MMfALt31V0Z3vJ,sk-c4aAhWVDzCczxc6uW3UQzbFdk0NszluxVzJk12a5Cvg5PJM6";
   const defaultOpenAIKeys = "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ,sk-y8fqFeOz4Yzk12wl62b97pjb8aBHDYPABVKG6fTELAVJhdD2,sk-HDRNAPkWxockGjGMOrUmH6t2efc8Y2I4B3Z9xvJIlzjpndbb";
-  const geminiKeys = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",").map(k => k.trim()).filter(Boolean);
-  const openaiKeys = (process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys).split(",").map(k => k.trim()).filter(Boolean);
+  const geminiKeys = defaultGeminiKeys.split(",").map(k => k.trim()).filter(Boolean);
+  const openaiKeys = defaultOpenAIKeys.split(",").map(k => k.trim()).filter(Boolean);
   
   let gIndex = 0;
   let oIndex = 0;
 
   async function callAIApi(isGemini: boolean, apiCall: (client: OpenAI, key: string, baseURL: string) => Promise<any>) {
-    const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
-    const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
+    const rawGemini = defaultGeminiKeys;
+    const rawOpenai = defaultOpenAIKeys;
     let keys = isGemini 
       ? rawGemini.split(",").map(k => k.trim()).filter(Boolean)
       : rawOpenai.split(",").map(k => k.trim()).filter(Boolean);
@@ -438,7 +438,7 @@ ${report}
           sendEvent({ type: "image_start", index: i });
           
           try {
-            const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
+            const rawOpenai = defaultOpenAIKeys;
             let basePrompt = screens[i].trim();
             // 清除LLM可能生成的重复或错误的 --ar 参数
             basePrompt = basePrompt.replace(/--ar\s+\S+/g, "").trim();
@@ -457,7 +457,7 @@ ${report}
 
             if (!rawOpenai) {
                 // FALLBACK to Gemini Native Image Generation
-                const geminiKey = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",")[0].trim();
+                const geminiKey = defaultGeminiKeys.split(",")[0].trim();
                 let geminiBase = process.env.GEMINI_BASE_URL || "";
                 if (geminiBase.endsWith("/v1")) geminiBase = geminiBase.replace("/v1", "");
                 if (geminiBase.endsWith("/v1/")) geminiBase = geminiBase.replace("/v1/", "");
