@@ -3,6 +3,7 @@ import path from "path";
 import multer from "multer";
 import cors from "cors";
 import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import "dotenv/config";
 
@@ -13,15 +14,44 @@ const upload = multer({
 
 const imageCache = new Map<string, { buffer: Buffer, mimetype: string }>();
 
+function parseSSEString(sseStr: string) {
+  let text = "";
+  const lines = sseStr.split('\n');
+  for (const line of lines) {
+    if (line.startsWith("data: ")) {
+      const dataStr = line.substring(6).trim();
+      if (dataStr === "[DONE]") continue;
+      try {
+        const obj = JSON.parse(dataStr);
+        if (obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content) {
+          text += obj.choices[0].delta.content;
+        }
+      } catch(e) {}
+    }
+  }
+  return text;
+}
+
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   console.log("Loaded CUSTOM_GEMINI_API_KEY:", !!process.env.CUSTOM_GEMINI_API_KEY);
+  console.log("Loaded GEMINI_API_KEY:", !!process.env.GEMINI_API_KEY);
   console.log("Loaded CUSTOM_OPENAI_API_KEY:", !!process.env.CUSTOM_OPENAI_API_KEY);
+  console.log("Loaded OPENAI_API_KEY:", !!process.env.OPENAI_API_KEY);
+
+  app.get("/api/keys", (req, res) => {
+    res.json({
+        gemini: !!process.env.GEMINI_API_KEY,
+        openai: !!process.env.OPENAI_API_KEY,
+        customGemini: !!process.env.CUSTOM_GEMINI_API_KEY,
+        customOpenai: !!process.env.CUSTOM_OPENAI_API_KEY,
+    });
+  });
 
   app.get("/api/temp-images/:id", (req, res) => {
     const file = imageCache.get(req.params.id);
@@ -43,17 +73,24 @@ async function startServer() {
   async function callAIApi(isGemini: boolean, apiCall: (client: OpenAI, key: string, baseURL: string) => Promise<any>) {
     const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
     const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
-    const keys = isGemini 
+    let keys = isGemini 
       ? rawGemini.split(",").map(k => k.trim()).filter(Boolean)
       : rawOpenai.split(",").map(k => k.trim()).filter(Boolean);
+
+    console.log(`[callAIApi] isGemini=${isGemini}, rawGemini length=${rawGemini.length}, initial keys length=${keys.length}`);
 
     if (keys.length === 0) throw new Error(`No ${isGemini ? 'Gemini' : 'OpenAI'} API keys configured`);
     
     let lastError: any;
-    for (let attempts = 0; attempts < keys.length; attempts++) {
+    const maxRetries = Math.max(3, keys.length);
+    for (let attempts = 0; attempts < maxRetries; attempts++) {
       const idx = isGemini ? gIndex++ : oIndex++;
       const key = keys[idx % keys.length];
-      const baseURL = (isGemini ? process.env.GEMINI_BASE_URL : process.env.OPENAI_BASE_URL) || "https://api.apimart.ai/v1";
+      const isStandardGeminiKey = isGemini && key.startsWith("AIza");
+      const defaultBaseURL = isStandardGeminiKey ? "https://generativelanguage.googleapis.com/v1beta/openai/" : "https://api.apimart.ai/v1";
+      let baseURL = isGemini ? process.env.GEMINI_BASE_URL : process.env.OPENAI_BASE_URL;
+      if (!baseURL) baseURL = defaultBaseURL;
+      
       const client = new OpenAI({ apiKey: key, baseURL });
       
       try {
@@ -68,17 +105,33 @@ async function startServer() {
       } catch (err: any) {
         console.error(`[API Error with ${isGemini ? 'Gemini' : 'OpenAI'} key ${key.slice(0, 6)}...]:`, err.message || err, JSON.stringify(err.response?.data || {}));
         lastError = err;
+        // Wait before retrying, especially on 429 or 5xx
+        const delayMs = 1000 * Math.pow(2, attempts);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
     throw lastError;
   }
 
   app.post("/api/generate-images", upload.any(), async (req, res) => {
-    res.setHeader("Content-Type", "application/x-ndjson");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    
+    // Write 2KB of padding to force Cloud Run/Nginx to flush the response headers immediately
+    res.write(Array(2048).fill(' ').join('') + "\n");
     
     let isCancelled = false;
-    res.on("close", () => { isCancelled = true; });
+    const pingInterval = setInterval(() => {
+        if (!isCancelled) res.write(JSON.stringify({ type: "ping", padding: Array(256).fill(' ').join('') }) + "\n");
+    }, 10000);
+
+    res.on("close", () => { 
+        isCancelled = true; 
+        clearInterval(pingInterval);
+    });
 
     const sendEvent = (event: any) => {
       if (!isCancelled) res.write(JSON.stringify(event) + "\n");
@@ -150,16 +203,21 @@ async function startServer() {
             ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
         ]}]
       }));
-      const report = reportRes?.choices?.[0]?.message?.content || "";
-      if (!reportRes?.choices) console.warn("Unexpected reportRes:", reportRes);
+      let report = "";
+      if (typeof reportRes === "string") {
+         report = parseSSEString(reportRes);
+      } else {
+         report = reportRes?.choices?.[0]?.message?.content || "";
+      }
+      if (!report) console.warn("Unexpected reportRes:", reportRes);
       sendEvent({ type: "report", data: report });
 
       // 2. 生成提示词与文案
       sendEvent({ type: "progress", progress: 50, message: "生成分镜提示词与文案..." });
       
-      const promptsPrompt = `我想为我的产品制作一套小红书爆款网感、带有“可爱手风涂鸦与排版包装”的手机摄影风格展示图。请帮我生成一套适用于AI绘画平台的摄影图设计系统提示词。
+      const promptsPrompt = `我想为我的产品制作一套小红书爆款网感、带有“可爱手风涂鸦与排版包装”的手机摄影风格展示图。请帮我生成一套适用于AI绘画平台的摄影图设计系统提示词。务必在每个分镜提示词开头加上："保证产品外观100%的一致性，原样还原产品特征（包括颜色、材质、形状、品牌标志、组件结构等极度细致的物理描述），"。
 #角色设定
-你是一位深洞察小红书“流量密码”的资深视觉内容总监爆款种草博主。你深刻领会“生活流”的产品种草，精通高质量手机摄影的真实镜头语言（如iPhone直出自然感）。你追求极简、清晰的高级构图，用“无脸美学”和“手持互动”来拉近与消费者的距离。同时，你非常擅长培养可爱的网络感包装，在真实的相片上面的尖端线条、箭头标注和手写体文字，营造出一种致命的、有情绪价值的“手账情节”。请根据我后续提供的【产品基础信息】，生成提示词。
+你是一位深洞察小红书“流量密码”的资深视觉内容总监爆款种草博主。你深刻领会“生活流”的产品种草，精通高质量手机摄影的真实镜头语言（如iPhone直出自然感）。你追求极简、清晰的高级构图，用“无脸美学”和“手持互动”来拉近与消费者的距离。同时，你非常擅长培养可爱的网络感包装，在真实的相片上面的尖端线条、箭头标注和手写体文字，营造出一种致命的、有情绪价值的“手账情节”。请根据我后续提供的【产品基础信息】和我上传的参考图片，极其精准地提取产品的每一处细节特征（材质、光泽、颜色、形状、图案等），生成提示词。
 提示词要求：
 正纯手机直出与真实生活感（摄影支撑）：画面必须是100%极端的真实手机主摄记录张力。需要有清晰的生活细节交代，光线为真实的自然光（如窗边底部阳光）或室内光。绝对不要单反的大光圈过度虚化（散景），保持随手拍的真实景深感。
 手持互动与极简无脸美学：绝对不能出现人物的脸部！焦点集中在【产品】以及【与产品互动的手部/身体局部】上。产品被自然地手持、托举，或放置在清理的生活场景中（如干净的纯色床单、原木桌面）。通过细腻的手模、干净的美甲或衣袖，营造出极强的第一人称代入感。
@@ -188,15 +246,29 @@ ${report}
 ${report}
 生成3款不同风格小红书爆款标题和文案，JSON数组输出：[{"title": "...", "content": "..."}]`;
 
-      const [resPrompts, resCopy] = await Promise.all([
-        callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: promptsPrompt }] })),
-        callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }))
-      ]);
+      // API keys and limits on free tiers can cause 429s if run concurrently. Running sequentially.
+      const resPrompts = await callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: [
+          { type: "text", text: promptsPrompt },
+          ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
+      ] }] }));
+      const resCopy = await callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }));
 
-      const promptsText = resPrompts?.choices?.[0]?.message?.content || "";
-      if (!resPrompts?.choices) console.warn("Unexpected resPrompts:", resPrompts);
-      const copyRaw = resCopy?.choices?.[0]?.message?.content?.replace(/```json/g, "").replace(/```/g, "").trim() || "[]";
-      if (!resCopy?.choices) console.warn("Unexpected resCopy:", resCopy);
+      let promptsText = "";
+      if (typeof resPrompts === "string") {
+         promptsText = parseSSEString(resPrompts);
+      } else {
+         promptsText = resPrompts?.choices?.[0]?.message?.content || "";
+      }
+      if (!promptsText) console.warn("Unexpected resPrompts:", resPrompts);
+      
+      let copyRaw = "";
+      if (typeof resCopy === "string") {
+         copyRaw = parseSSEString(resCopy);
+      } else {
+         copyRaw = resCopy?.choices?.[0]?.message?.content || "";
+      }
+      copyRaw = copyRaw.replace(/```json/g, "").replace(/```/g, "").trim() || "[]";
+      if (!copyRaw || copyRaw === "[]") console.warn("Unexpected resCopy:", resCopy);
       
       let copy = [];
       try {
@@ -206,81 +278,182 @@ ${report}
       }
       sendEvent({ type: "copywriting", data: copy });
 
-      // Cache user image temporarily by uploading to tmpfiles.org for img2img reference
+      // Cache user image temporarily by uploading to freeimage.host for img2img reference
       let tempImageUrl = "";
+      let refBase64 = "";
+      let refMime = "";
       try {
-        const formData = new FormData();
-        const blob = new Blob([files[0].buffer], { type: files[0].mimetype });
-        formData.append("file", blob, files[0].originalname || "image.png");
-        const uploadRes = await fetch("https://tmpfiles.org/api/v1/upload", {
-          method: "POST",
-          body: formData as any
-        });
-        const uploadData: any = await uploadRes.json();
-        if (uploadData && uploadData.data && uploadData.data.url) {
-           tempImageUrl = uploadData.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
-           console.log("Uploaded reference image to:", tempImageUrl);
+        if (files && files[0]) {
+          const formData = new FormData();
+          refBase64 = files[0].buffer.toString("base64");
+          refMime = files[0].mimetype || "image/png";
+          formData.append("image", refBase64);
+          // Pub API key for freeimage.host, anonymous and very reliable
+          formData.append("key", "6d207e02198a847aa98d0a2a901485a5");
+          console.log("Uploading reference image to freeimage.host...");
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          const uploadRes = await fetch("https://freeimage.host/api/1/upload", {
+            method: "POST",
+            body: formData as any,
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          const uploadData: any = await uploadRes.json();
+          if (uploadData && uploadData.status_code === 200 && uploadData.image && uploadData.image.url) {
+             tempImageUrl = uploadData.image.url;
+             console.log("Uploaded reference image to:", tempImageUrl);
+          } else {
+             console.error("Freeimage.host upload failed:", uploadData);
+          }
         }
       } catch (e: any) {
         console.error("Failed to upload reference image:", e.message);
       }
 
       // 3. 生成图片
-      const screens = promptsText.split(/【第\d+屏】/).filter(Boolean);
-      const limit = Math.min(screens.length, count);
-      
-      await Promise.all(
-        Array.from({ length: limit }).map(async (_, i) => {
-          if(isCancelled) return;
+      let screens = promptsText.split(/[\*\s]*【第\d+屏】[\*\s]*/).filter(Boolean);
+      if (screens.length === 0) {
+          screens = [promptsText];
+      }
+      const limit = Math.min(screens.length, count, 16);
+
+      async function asyncPool(poolLimit: number, array: any[], iteratorFn: (item: any, index: number) => Promise<any>) {
+          const ret = [];
+          const executing: Promise<any>[] = [];
+          for (let i = 0; i < array.length; i++) {
+              if (isCancelled) return;
+              const p = Promise.resolve().then(() => iteratorFn(array[i], i));
+              ret.push(p);
+              if (poolLimit <= array.length) {
+                  const e: Promise<any> = p.then(() => { executing.splice(executing.indexOf(e), 1); });
+                  executing.push(e);
+                  if (executing.length >= poolLimit) { await Promise.race(executing); }
+              }
+          }
+          return Promise.all(ret);
+      }
+
+      await asyncPool(2, Array.from({ length: limit }), async (_, i) => {
+          if (isCancelled) return;
           sendEvent({ type: "image_start", index: i });
           
           try {
-            await callAIApi(false, async (client, key, baseURL) => {
-              let basePrompt = screens[i].trim();
-              // 清除LLM可能生成的重复或错误的 --ar 参数
-              basePrompt = basePrompt.replace(/--ar\s+\S+/g, "").trim();
-              
-              let qualityKeywords = "";
-              if (resolution === "4k") qualityKeywords = "4k resolution, ultra detailed, masterpiece, highly detailed";
-              else if (resolution === "2k") qualityKeywords = "2k resolution, high quality, detailed";
-              else qualityKeywords = "1k, clear, high quality";
-              
-              const finalPrompt = `${basePrompt}, ${qualityKeywords} --ar ${aspectRatio}`;
-              
-              // Calculate size mapped values for 1k, 2k, 4k based on APIMart valid bounds (max 8294400 pixels, multiples of 16)
-              let sizeMap = "1024x1024";
-              if (aspectRatio === "3:4") {
-                  if (resolution === "4k") sizeMap = "2448x3264";
-                  else if (resolution === "2k") sizeMap = "1536x2048";
-                  else sizeMap = "768x1024";
-              } else if (aspectRatio === "4:3") {
-                  if (resolution === "4k") sizeMap = "3264x2448";
-                  else if (resolution === "2k") sizeMap = "2048x1536";
-                  else sizeMap = "1024x768";
-              } else if (aspectRatio === "9:16") {
-                  if (resolution === "4k") sizeMap = "2160x3840";
-                  else if (resolution === "2k") sizeMap = "1152x2048";
-                  else sizeMap = "576x1024";
-              } else if (aspectRatio === "16:9") {
-                  if (resolution === "4k") sizeMap = "3840x2160";
-                  else if (resolution === "2k") sizeMap = "2048x1152";
-                  else sizeMap = "1024x576";
-              } else {
-                  // Default 1:1 or unknown
-                  if (resolution === "4k") sizeMap = "2880x2880";
-                  else if (resolution === "2k") sizeMap = "2048x2048";
-                  else sizeMap = "1024x1024";
-              }
+            const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+            let basePrompt = screens[i].trim();
+            // 清除LLM可能生成的重复或错误的 --ar 参数
+            basePrompt = basePrompt.replace(/--ar\s+\S+/g, "").trim();
+            
+            let qualityKeywords = "";
+            if (resolution === "4k") qualityKeywords = "4k resolution, ultra detailed, masterpiece, highly detailed";
+            else if (resolution === "2k") qualityKeywords = "2k resolution, high quality, detailed";
+            else qualityKeywords = "1k, clear, high quality";
+            
+            const finalPrompt = `保证产品外观100%的一致性，原样还原产品特征。${basePrompt}, ${qualityKeywords}`;
+            
+            let effectivePrompt = finalPrompt;
+            if (tempImageUrl) {
+                effectivePrompt = `${tempImageUrl} ${finalPrompt}`;
+            }
 
-              const reqBody: any = {
-                  model: process.env.OPENAI_MODEL || "gpt-image-2",
-                  prompt: finalPrompt,
-                  n: 1,
-                  size: sizeMap
-              };
-              if (tempImageUrl) {
-                  reqBody.image_url = tempImageUrl;
-              }
+            if (!rawOpenai) {
+                // FALLBACK to Gemini Native Image Generation
+                const geminiKey = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").split(",")[0].trim();
+                const ai = new GoogleGenAI({ 
+                    apiKey: geminiKey,
+                    httpOptions: !geminiKey.startsWith("AIza") ? { baseUrl: process.env.GEMINI_BASE_URL || "https://api.apimart.ai" } : undefined
+                });
+                const sizeMapGemini: any = resolution === "4k" ? "4K" : resolution === "2k" ? "2K" : "1K";
+                
+                let geminiRes;
+                let lastError;
+                
+                let geminiParts: any[] = [{ text: finalPrompt }];
+                if (refBase64) {
+                    geminiParts.unshift({ inlineData: { data: refBase64, mimeType: refMime } });
+                }
+
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    try {
+                        geminiRes = await ai.models.generateContent({
+                            model: 'gemini-3.1-flash-image-preview',
+                            contents: { parts: geminiParts },
+                            config: {
+                                imageConfig: { aspectRatio: aspectRatio as any, imageSize: sizeMapGemini }
+                            }
+                        });
+                        break;
+                    } catch (err: any) {
+                        console.error("Gemini API image generation failed, retry in " + attempt, err.message);
+                        lastError = err;
+                        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+                    }
+                }
+                
+                if (!geminiRes) throw lastError;
+                
+                let imageData = "";
+                for (const part of (geminiRes.candidates?.[0]?.content?.parts || [])) {
+                    if (part.inlineData) {
+                        imageData = part.inlineData.data;
+                        break;
+                    }
+                }
+                
+                if (!imageData) throw new Error("Gemini Image generation returned empty data.");
+                
+                const tempId = `generated-${Date.now()}-${i}`;
+                imageCache.set(tempId, { buffer: Buffer.from(imageData, "base64"), mimetype: "image/png" });
+                const localUrl = `/api/temp-images/${tempId}`;
+                sendEvent({ type: "image", index: i, data: { imageUrl: localUrl, caption: screens[i].trim() } });
+                
+            } else {
+                await callAIApi(false, async (client, key, baseURL) => {
+                  let sizeMap = "1024x1024";
+                  if (aspectRatio === "3:4") {
+                      if (resolution === "4k") sizeMap = "2448x3264";
+                      else if (resolution === "2k") sizeMap = "1536x2048";
+                      else sizeMap = "768x1024";
+                  } else if (aspectRatio === "4:3") {
+                      if (resolution === "4k") sizeMap = "3264x2448";
+                      else if (resolution === "2k") sizeMap = "2048x1536";
+                      else sizeMap = "1024x768";
+                  } else if (aspectRatio === "9:16") {
+                      if (resolution === "4k") sizeMap = "2160x3840";
+                      else if (resolution === "2k") sizeMap = "1152x2048";
+                      else sizeMap = "576x1024";
+                  } else if (aspectRatio === "16:9") {
+                      if (resolution === "4k") sizeMap = "3840x2160";
+                      else if (resolution === "2k") sizeMap = "2048x1152";
+                      else sizeMap = "1024x576";
+                  } else {
+                      // Default 1:1 or unknown
+                      if (resolution === "4k") sizeMap = "2880x2880";
+                      else if (resolution === "2k") sizeMap = "2048x2048";
+                      else sizeMap = "1024x1024";
+                  }
+
+                  const reqBody: any = {
+                      model: process.env.OPENAI_MODEL || "gpt-image-2",
+                      prompt: effectivePrompt,
+                      n: 1,
+                      size: sizeMap
+                  };
+                  
+                  if (tempImageUrl) {
+                      reqBody.image = tempImageUrl;
+                      reqBody.image_url = tempImageUrl;
+                      reqBody.init_image = tempImageUrl;
+                  }
+                  if (refBase64) {
+                      const dataUri = `data:${refMime};base64,${refBase64}`;
+                      reqBody.image_base64 = dataUri;
+                      if (!tempImageUrl) {
+                          reqBody.image = dataUri;
+                          reqBody.image_url = dataUri;
+                          reqBody.init_image = dataUri;
+                      }
+                  }
               
               const imgRes: any = await fetch(`${baseURL.replace(/\/$/, '')}/images/generations`, {
                   method: "POST",
@@ -289,9 +462,19 @@ ${report}
                       "Authorization": `Bearer ${key}`
                   },
                   body: JSON.stringify(reqBody)
-              }).then(r => r.json());
+              }).then(async r => {
+                  const text = await r.text();
+                  try {
+                      return JSON.parse(text);
+                  } catch(e) {
+                      throw new Error(`Failed to parse response: ${text.substring(0, 100)}`);
+                  }
+              });
               
-              console.log(`[Image Generation Response] ${i}:`, JSON.stringify(imgRes));
+              console.log(`[Image Generation Response] ${i}:`, JSON.stringify(imgRes).substring(0, 500));
+              if (imgRes.error) {
+                  throw new Error(imgRes.error.message || JSON.stringify(imgRes.error));
+              }
               
               let imageUrl = "";
               if (imgRes.data && imgRes.data.length > 0) {
@@ -345,22 +528,23 @@ ${report}
             }
             
             if (!imageUrl) throw new Error("未能获取图像URL");
-            const payload = { imageUrl: imageUrl, caption: basePrompt };
+            
+            const payload = { imageUrl: imageUrl, caption: finalPrompt };
             sendEvent({ type: "image", index: i, data: payload });
             return imageUrl;
             });
+            } // Close else block
           } catch(e: any) {
             console.error(`Error generating image ${i}:`, e.message);
-            sendEvent({ type: "image", index: i, data: { error: e.message || "Failed", caption: screens[i].trim() } });
+            sendEvent({ type: "image", index: i, data: { error: e.message || "Failed", caption: screens[i]?.trim() || "Image Generation Failed" } });
           }
-        })
-      );
-
+      });
 
       sendEvent({ type: "done" });
     } catch (e: any) {
       sendEvent({ type: "error", message: e.message });
     } finally {
+      clearInterval(pingInterval);
       res.end();
     }
   });
