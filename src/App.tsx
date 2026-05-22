@@ -201,6 +201,8 @@ export default function App() {
   
   const abortControllerRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const touchStartXRef = useRef<number | null>(null);
+  const touchEndXRef = useRef<number | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -900,7 +902,10 @@ export default function App() {
                                key={idx}
                                className="bg-gray-50 rounded-xl md:rounded-2xl overflow-hidden border border-gray-100 group shadow-sm hover:shadow-lg transition-all relative"
                             >
-                               <div className="relative aspect-[3/4] bg-gray-100 overflow-hidden">
+                               <div 
+                                 className="relative aspect-[3/4] bg-gray-100 overflow-hidden cursor-pointer"
+                                 onClick={() => setPreviewState({ images: currentGroup.results.map((r: any) => r?.imageUrl || ""), index: idx })}
+                               >
                                   <img 
                                     referrerPolicy="no-referrer"
                                     src={item.imageUrl || undefined} 
@@ -1019,7 +1024,14 @@ export default function App() {
                                   <span className="text-[10px] text-red-500 font-medium leading-tight">{img.error}</span>
                                </div>
                              ) : (
-                               <img referrerPolicy="no-referrer" src={img.imageUrl || undefined} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="lib" loading="lazy" />
+                               <img 
+                                 referrerPolicy="no-referrer" 
+                                 src={img.imageUrl || undefined} 
+                                 className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 cursor-pointer" 
+                                 alt="lib" 
+                                 loading="lazy" 
+                                 onClick={() => setPreviewState({ images: group.results.map(r => r.imageUrl || ""), index: i })}
+                               />
                              )}
                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3">
                                 <div className="flex justify-end gap-1.5">
@@ -1123,8 +1135,24 @@ export default function App() {
             initial={{ opacity: 0 }} 
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex items-center justify-center p-4 md:p-8"
+            className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-sm flex items-center justify-center p-4 md:p-8 overflow-hidden touch-none"
             onClick={() => setPreviewState(null)}
+            onTouchStart={(e) => {
+               touchStartXRef.current = e.touches[0].clientX;
+               touchEndXRef.current = null;
+            }}
+            onTouchMove={(e) => {
+               touchEndXRef.current = e.touches[0].clientX;
+            }}
+            onTouchEnd={() => {
+               if (touchStartXRef.current === null || touchEndXRef.current === null) return;
+               const distance = touchStartXRef.current - touchEndXRef.current;
+               if (distance > 50) {
+                 setPreviewState({ ...previewState, index: (previewState.index + 1) % previewState.images.length });
+               } else if (distance < -50) {
+                 setPreviewState({ ...previewState, index: (previewState.index - 1 + previewState.images.length) % previewState.images.length });
+               }
+            }}
           >
             <button className="absolute top-6 right-6 text-white/50 hover:text-white p-2 transition-colors z-[101]">
               <X className="w-8 h-8" />

@@ -121,7 +121,7 @@ async function startServer() {
 
   // Helper clients
   const defaultGeminiKeys = "sk-kvhOwF1zT9BNOPa90QH5YCGesNeW3DqvOY6tfRzYaouup3Dx,sk-LEhPYznQH24Gclagj2Dry9jNOaaPrTslt9MMfALt31V0Z3vJ,sk-c4aAhWVDzCczxc6uW3UQzbFdk0NszluxVzJk12a5Cvg5PJM6";
-  const defaultOpenAIKeys = "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ,sk-y8fqFeOz4Yzk12wl62b97pjb8aBHDYPABVKG6fTELAVJhdD2,sk-HDRNAPkWxockGjGMOrUmH6t2efc8Y2I4B3Z9xvJIlzjpndbb";
+  const defaultOpenAIKeys = "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ,sk-y8fqFeOz4Yzk12wl62b97pjb8aBHDYPABVKG6fTELAVJhdD2,sk-HDRNAPkWxockGjGMOrUmH6t2efc8Y2I4B3Z9xvJIlzjpndbb,sk-KnmvvQBhNIg0ugDg5CooApCmIUYqoQksZutNOP7n1266DSI1,sk-2rKVvAQFHp7iYJwaMPczBZcbeTyMQqoEJ6CfwQraEkshp2cU,sk-cInBjQXULjlvHEuUkyVLJLiD8ODTTU7HaRsZG1rLj0ynizjo,sk-AE6gHz2vdE0xdL8ZDDTayy6aQEwKLeYOj1nZGPZcCUiGLvn8,sk-Stq40DKcVKCAs956qFFLCxsS1uETJpSEpz7xAVWDsimx7uqn,sk-CunkgIzOqF1Dj0E4RgF6H6rMbHjofe69o66KnizuQYyKOTn0,sk-WtgcIw3flJOhtjGQAUcevn1fXW97ow4UIojLjRD3IVSNIVPu,sk-J13O6Wi1N6NXZq1dYBfiSnKzb6TcsVO4RAh7bvDjnIJys8KA,sk-JXcuFwb5KfmlFmoDanMI9JMyiOufMiuFJSWluxDyUGuKKwvW,sk-bngxsMCj9F9m1uJJbHhkcahF3WfAr2NkpHLVB1IlYBRmGrrP";
   const geminiKeys = defaultGeminiKeys.split(",").map(k => k.trim()).filter(Boolean);
   const openaiKeys = defaultOpenAIKeys.split(",").map(k => k.trim()).filter(Boolean);
   
@@ -129,8 +129,13 @@ async function startServer() {
   let oIndex = 0;
 
   async function callAIApi(isGemini: boolean, apiCall: (client: OpenAI, key: string, baseURL: string) => Promise<any>) {
-    const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
-    const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
+    let rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
+    let rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
+    
+    // Always fallback to defaults if environmental variable does not look like an API key. 
+    if (!rawGemini.includes("sk-") && !rawGemini.includes("AIza")) rawGemini = defaultGeminiKeys;
+    if (!rawOpenai.includes("sk-")) rawOpenai = defaultOpenAIKeys;
+    
     let keys = isGemini 
       ? rawGemini.split(",").map(k => k.trim()).filter(Boolean)
       : rawOpenai.split(",").map(k => k.trim()).filter(Boolean);
@@ -463,7 +468,8 @@ ${report}
           return Promise.all(ret);
       }
 
-      await asyncPool(16, Array.from({ length: limit }), async (_, i) => {
+      const concurrencyLimit = 13; // Match the number of default OpenAI keys to avoid rate limit delays.
+      await asyncPool(concurrencyLimit, Array.from({ length: limit }), async (_, i) => {
           if (isCancelled) return;
           sendEvent({ type: "image_start", index: i });
           
@@ -485,7 +491,9 @@ ${report}
                 effectivePrompt = `${tempImageUrl} ${finalPrompt}`;
             }
 
-            const currentGeminiKeysArray = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",").map(k => k.trim()).filter(Boolean);
+            let rawGeminiImage = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
+            if (!rawGeminiImage.includes("sk-") && !rawGeminiImage.includes("AIza")) rawGeminiImage = defaultGeminiKeys;
+            const currentGeminiKeysArray = rawGeminiImage.split(",").map(k => k.trim()).filter(Boolean);
             const isAIzaKey = false;
 
             if (isAIzaKey) {
