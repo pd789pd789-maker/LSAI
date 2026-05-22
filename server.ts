@@ -145,7 +145,8 @@ async function startServer() {
       const idx = isGemini ? gIndex++ : oIndex++;
       const key = keys[idx % keys.length];
       const isStandardGeminiKey = isGemini && key.startsWith("AIza");
-      const isStandardOpenAIKey = !isGemini && key.startsWith("sk-");
+      const isDefaultOpenAIKey = !isGemini && defaultOpenAIKeys.includes(key);
+      const isStandardOpenAIKey = !isGemini && key.startsWith("sk-") && !isDefaultOpenAIKey;
       
       const defaultGeminiBaseURL = isStandardGeminiKey ? "https://generativelanguage.googleapis.com/v1beta/openai/" : "https://api.apimart.ai/v1";
       const defaultOpenAIBaseURL = isStandardOpenAIKey ? "https://api.openai.com/v1" : "https://api.apimart.ai/v1";
@@ -293,7 +294,7 @@ async function startServer() {
               ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
           ]}]
         })).catch(() => callAIApi(false, (ai) => ai.chat.completions.create({
-          model: "gpt-4o-mini",
+          model: "gemini-3-flash-preview",
           stream: false,
           messages: [{ role: "user", content: [
               { type: "text", text: reportPrompt },
@@ -301,6 +302,9 @@ async function startServer() {
           ]}]
         })));
       } catch (err: any) {
+         if (err.message && err.message.includes("does not have access")) {
+           throw new Error("内置的默认 API Key 暂无所需模型权限。请在右上方 Settings -> API Keys 中配置您个人的 Gemini 或 OpenAI API Key。");
+         }
          throw new Error("第一步分析失败，请检查API Key设置: " + err.message);
       }
       let report = "";
@@ -392,15 +396,18 @@ ${report}
            callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: [
               { type: "text", text: promptsPrompt },
               ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
-          ] }] })).catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: [
+          ] }] })).catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: [
               { type: "text", text: promptsPrompt },
               ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
           ] }] }))),
            callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }))
-              .catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: copyPrompt }] }))),
+              .catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }))),
            uploadImageTask()
         ]);
       } catch (err: any) {
+         if (err.message && err.message.includes("does not have access")) {
+           throw new Error("内置的默认 API Key 暂无所需模型权限。请在右上方 Settings -> API Keys 中配置您个人的 Gemini 或 OpenAI API Key。");
+         }
          throw new Error("模型调用失败，请检查各API Key是否有效: " + err.message);
       }
 
