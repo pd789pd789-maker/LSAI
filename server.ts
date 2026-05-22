@@ -102,15 +102,17 @@ async function startServer() {
   });
 
   // Helper clients
-  const geminiKeys = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").split(",").map(k => k.trim()).filter(Boolean);
-  const openaiKeys = (process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "").split(",").map(k => k.trim()).filter(Boolean);
+  const defaultGeminiKeys = "sk-kvhOwF1zT9BNOPa90QH5YCGesNeW3DqvOY6tfRzYaouup3Dx,sk-LEhPYznQH24Gclagj2Dry9jNOaaPrTslt9MMfALt31V0Z3vJ,sk-c4aAhWVDzCczxc6uW3UQzbFdk0NszluxVzJk12a5Cvg5PJM6";
+  const defaultOpenAIKeys = "sk-eoOYqKkL7d7jupObsaFPu6K8Wun9u1t8Yu21rRY0s2BRFFaJ,sk-y8fqFeOz4Yzk12wl62b97pjb8aBHDYPABVKG6fTELAVJhdD2,sk-HDRNAPkWxockGjGMOrUmH6t2efc8Y2I4B3Z9xvJIlzjpndbb";
+  const geminiKeys = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",").map(k => k.trim()).filter(Boolean);
+  const openaiKeys = (process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys).split(",").map(k => k.trim()).filter(Boolean);
   
   let gIndex = 0;
   let oIndex = 0;
 
   async function callAIApi(isGemini: boolean, apiCall: (client: OpenAI, key: string, baseURL: string) => Promise<any>) {
-    const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
-    const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+    const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
+    const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
     let keys = isGemini 
       ? rawGemini.split(",").map(k => k.trim()).filter(Boolean)
       : rawOpenai.split(",").map(k => k.trim()).filter(Boolean);
@@ -124,9 +126,15 @@ async function startServer() {
     for (let attempts = 0; attempts < maxRetries; attempts++) {
       const idx = isGemini ? gIndex++ : oIndex++;
       const key = keys[idx % keys.length];
+      const isStandardGeminiKey = isGemini && key.startsWith("AIza");
+      const isStandardOpenAIKey = !isGemini && key.startsWith("sk-");
+      
+      const defaultGeminiBaseURL = isStandardGeminiKey ? "https://generativelanguage.googleapis.com/v1beta/openai/" : "https://api.apimart.ai/v1";
+      const defaultOpenAIBaseURL = isStandardOpenAIKey ? "https://api.openai.com/v1" : "https://api.apimart.ai/v1";
+      
       const clientBaseURL = isGemini 
-        ? process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/"
-        : process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+        ? process.env.GEMINI_BASE_URL || defaultGeminiBaseURL
+        : process.env.OPENAI_BASE_URL || defaultOpenAIBaseURL;
       
       const client = new OpenAI({ apiKey: key, baseURL: clientBaseURL });
       
@@ -204,8 +212,8 @@ async function startServer() {
         if (!userDoc) {
            throw new Error("请先登录，当前操作需要验证积分身份。");
         }
-        if (userDoc.points < requiredPointsPerImage) {
-           throw new Error(`积分不足：每次生成至少需要 ${requiredPointsPerImage} 积分，您当前拥有 ${userDoc.points} 积分。`);
+        if (userDoc.points < requiredPointsPerImage * parseInt(req.body.count || "4", 10)) {
+           throw new Error(`积分不足：本次生成需要 ${requiredPointsPerImage * parseInt(req.body.count || "4", 10)} 积分，您当前拥有 ${userDoc.points} 积分。`);
         }
       }
 
@@ -258,14 +266,26 @@ async function startServer() {
 推荐镜头语言：[如：iPhone 15 Pro 广角俯拍 / 2倍人像模式手持特色]
 特殊需求：补充需求 ${description}`;
 
-      const reportRes = await callAIApi(true, (ai) => ai.chat.completions.create({
-        model: "gemini-3-flash-preview",
-        stream: false,
-        messages: [{ role: "user", content: [
-            { type: "text", text: reportPrompt },
-            ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
-        ]}]
-      }));
+      let reportRes;
+      try {
+        reportRes = await callAIApi(true, (ai) => ai.chat.completions.create({
+          model: "gemini-3-flash-preview",
+          stream: false,
+          messages: [{ role: "user", content: [
+              { type: "text", text: reportPrompt },
+              ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
+          ]}]
+        })).catch(() => callAIApi(false, (ai) => ai.chat.completions.create({
+          model: "gpt-4o-mini",
+          stream: false,
+          messages: [{ role: "user", content: [
+              { type: "text", text: reportPrompt },
+              ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
+          ]}]
+        })));
+      } catch (err: any) {
+         throw new Error("第一步分析失败，请检查API Key设置: " + err.message);
+      }
       let report = "";
       if (typeof reportRes === "string") {
          report = parseSSEString(reportRes);
@@ -275,7 +295,7 @@ async function startServer() {
       if (!report) console.warn("Unexpected reportRes:", reportRes);
       sendEvent({ type: "report", data: report });
 
-      // 2. 生成提示词与文案
+      // 2. 并发生成提示词、文案及上传参考图
       sendEvent({ type: "progress", progress: 50, message: "生成分镜提示词与文案..." });
       
       const promptsPrompt = `我想为我的产品制作一套小红书爆款网感、带有“可爱手风涂鸦与排版包装”的手机摄影风格展示图。请帮我生成一套适用于AI绘画平台的摄影图设计系统提示词。务必在每个分镜提示词开头加上："保证产品外观100%的一致性，原样还原产品特征（包括颜色、材质、形状、品牌标志、组件结构等极度细致的物理描述），"。
@@ -309,12 +329,59 @@ ${report}
 ${report}
 生成3款不同风格小红书爆款标题和文案，JSON数组输出：[{"title": "...", "content": "..."}]`;
 
-      // API keys and limits on free tiers can cause 429s if run concurrently. Running sequentially.
-      const resPrompts = await callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: [
-          { type: "text", text: promptsPrompt },
-          ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
-      ] }] }));
-      const resCopy = await callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }));
+      const uploadImageTask = async () => {
+        let tempImageUrl = "";
+        let refBase64 = "";
+        let refMime = "";
+        try {
+          if (files && files[0]) {
+            const formData = new FormData();
+            refBase64 = files[0].buffer.toString("base64");
+            refMime = files[0].mimetype || "image/png";
+            formData.append("image", refBase64);
+            formData.append("key", "6d207e02198a847aa98d0a2a901485a5");
+            console.log("Uploading reference image to freeimage.host...");
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            const uploadRes = await fetch("https://freeimage.host/api/1/upload", {
+              method: "POST",
+              body: formData as any,
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            const uploadData: any = await uploadRes.json();
+            if (uploadData && uploadData.status_code === 200 && uploadData.image && uploadData.image.url) {
+               tempImageUrl = uploadData.image.url;
+               console.log("Uploaded reference image to:", tempImageUrl);
+            } else {
+               console.error("Freeimage.host upload failed:", uploadData);
+            }
+          }
+        } catch (e: any) {
+          console.error("Failed to upload reference image:", e.message);
+        }
+        return { tempImageUrl, refBase64, refMime };
+      };
+
+      let resPrompts, resCopy, rawImageData;
+      try {
+        [resPrompts, resCopy, rawImageData] = await Promise.all([
+           callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: [
+              { type: "text", text: promptsPrompt },
+              ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
+          ] }] })).catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: [
+              { type: "text", text: promptsPrompt },
+              ...files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }))
+          ] }] }))),
+           callAIApi(true, (ai) => ai.chat.completions.create({ model: "gemini-3-flash-preview", stream: false, messages: [{ role: "user", content: copyPrompt }] }))
+              .catch(() => callAIApi(false, (ai) => ai.chat.completions.create({ model: "gpt-4o-mini", stream: false, messages: [{ role: "user", content: copyPrompt }] }))),
+           uploadImageTask()
+        ]);
+      } catch (err: any) {
+         throw new Error("模型调用失败，请检查各API Key是否有效: " + err.message);
+      }
+
+      const { tempImageUrl, refBase64, refMime } = rawImageData;
 
       let promptsText = "";
       if (typeof resPrompts === "string") {
@@ -341,38 +408,7 @@ ${report}
       }
       sendEvent({ type: "copywriting", data: copy });
 
-      // Cache user image temporarily by uploading to freeimage.host for img2img reference
-      let tempImageUrl = "";
-      let refBase64 = "";
-      let refMime = "";
-      try {
-        if (files && files[0]) {
-          const formData = new FormData();
-          refBase64 = files[0].buffer.toString("base64");
-          refMime = files[0].mimetype || "image/png";
-          formData.append("image", refBase64);
-          // Pub API key for freeimage.host, anonymous and very reliable
-          formData.append("key", "6d207e02198a847aa98d0a2a901485a5");
-          console.log("Uploading reference image to freeimage.host...");
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
-          const uploadRes = await fetch("https://freeimage.host/api/1/upload", {
-            method: "POST",
-            body: formData as any,
-            signal: controller.signal
-          });
-          clearTimeout(timeoutId);
-          const uploadData: any = await uploadRes.json();
-          if (uploadData && uploadData.status_code === 200 && uploadData.image && uploadData.image.url) {
-             tempImageUrl = uploadData.image.url;
-             console.log("Uploaded reference image to:", tempImageUrl);
-          } else {
-             console.error("Freeimage.host upload failed:", uploadData);
-          }
-        }
-      } catch (e: any) {
-        console.error("Failed to upload reference image:", e.message);
-      }
+      // Removed redundant upload logic
 
       // 3. 生成图片
       let screens = promptsText.split(/[\*\s]*【第\d+屏】[\*\s]*/).filter(Boolean);
@@ -397,12 +433,12 @@ ${report}
           return Promise.all(ret);
       }
 
-      await asyncPool(2, Array.from({ length: limit }), async (_, i) => {
+      await asyncPool(16, Array.from({ length: limit }), async (_, i) => {
           if (isCancelled) return;
           sendEvent({ type: "image_start", index: i });
           
           try {
-            const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
+            const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
             let basePrompt = screens[i].trim();
             // 清除LLM可能生成的重复或错误的 --ar 参数
             basePrompt = basePrompt.replace(/--ar\s+\S+/g, "").trim();
@@ -421,10 +457,15 @@ ${report}
 
             if (!rawOpenai) {
                 // FALLBACK to Gemini Native Image Generation
-                const geminiKey = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").split(",")[0].trim();
+                const geminiKey = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",")[0].trim();
+                let geminiBase = process.env.GEMINI_BASE_URL || "";
+                if (geminiBase.endsWith("/v1")) geminiBase = geminiBase.replace("/v1", "");
+                if (geminiBase.endsWith("/v1/")) geminiBase = geminiBase.replace("/v1/", "");
                 const ai = new GoogleGenAI({ 
                     apiKey: geminiKey,
-                    httpOptions: process.env.GEMINI_BASE_URL ? { baseUrl: process.env.GEMINI_BASE_URL } : undefined
+                    httpOptions: geminiBase 
+                       ? { baseUrl: geminiBase } 
+                       : (!geminiKey.startsWith("AIza") ? { baseUrl: "https://api.apimart.ai" } : undefined)
                 });
                 const sizeMapGemini: any = resolution === "4k" ? "4K" : resolution === "2k" ? "2K" : "1K";
                 
@@ -466,9 +507,10 @@ ${report}
                 if (!imageData) throw new Error("Gemini Image generation returned empty data.");
                 
                 if (authEnabled && userDoc) {
-                   userDoc.points -= requiredPointsPerImage;
-                   await userDoc.save();
-                   sendEvent({ type: "points_update", data: { points: userDoc.points } });
+                   const updatedUser = await User.findByIdAndUpdate(userDoc._id, { $inc: { points: -requiredPointsPerImage } }, { new: true });
+                   if (updatedUser) {
+                       sendEvent({ type: "points_update", data: { points: updatedUser.points } });
+                   }
                 }
 
                 const tempId = `generated-${Date.now()}-${i}`;
@@ -599,9 +641,10 @@ ${report}
             if (!imageUrl) throw new Error("未能获取图像URL");
             
             if (authEnabled && userDoc) {
-               userDoc.points -= requiredPointsPerImage;
-               await userDoc.save();
-               sendEvent({ type: "points_update", data: { points: userDoc.points } });
+               const updatedUser = await User.findByIdAndUpdate(userDoc._id, { $inc: { points: -requiredPointsPerImage } }, { new: true });
+               if (updatedUser) {
+                   sendEvent({ type: "points_update", data: { points: updatedUser.points } });
+               }
             }
 
             const payload = { imageUrl: imageUrl, caption: finalPrompt };
