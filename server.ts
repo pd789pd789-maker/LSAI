@@ -79,6 +79,8 @@ async function startServer() {
   console.log("Loaded GEMINI_API_KEY:", !!process.env.GEMINI_API_KEY);
   console.log("Loaded CUSTOM_OPENAI_API_KEY:", !!process.env.CUSTOM_OPENAI_API_KEY);
   console.log("Loaded OPENAI_API_KEY:", !!process.env.OPENAI_API_KEY);
+  console.log("GEMINI_BASE_URL:", process.env.GEMINI_BASE_URL || "not set");
+  console.log("OPENAI_BASE_URL:", process.env.OPENAI_BASE_URL || "not set");
 
   app.get("/api/keys", (req, res) => {
     res.json({
@@ -122,15 +124,14 @@ async function startServer() {
     for (let attempts = 0; attempts < maxRetries; attempts++) {
       const idx = isGemini ? gIndex++ : oIndex++;
       const key = keys[idx % keys.length];
-      const isStandardGeminiKey = isGemini && key.startsWith("AIza");
-      const defaultBaseURL = isStandardGeminiKey ? "https://generativelanguage.googleapis.com/v1beta/openai/" : "https://api.apimart.ai/v1";
-      let baseURL = isGemini ? process.env.GEMINI_BASE_URL : process.env.OPENAI_BASE_URL;
-      if (!baseURL) baseURL = defaultBaseURL;
+      const clientBaseURL = isGemini 
+        ? process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/"
+        : process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
       
-      const client = new OpenAI({ apiKey: key, baseURL });
+      const client = new OpenAI({ apiKey: key, baseURL: clientBaseURL });
       
       try {
-        const res = await apiCall(client, key, baseURL);
+        const res = await apiCall(client, key, clientBaseURL);
         if (!res) {
           throw new Error("API returned null/undefined response");
         }
@@ -423,7 +424,7 @@ ${report}
                 const geminiKey = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").split(",")[0].trim();
                 const ai = new GoogleGenAI({ 
                     apiKey: geminiKey,
-                    httpOptions: !geminiKey.startsWith("AIza") ? { baseUrl: process.env.GEMINI_BASE_URL || "https://api.apimart.ai" } : undefined
+                    httpOptions: process.env.GEMINI_BASE_URL ? { baseUrl: process.env.GEMINI_BASE_URL } : undefined
                 });
                 const sizeMapGemini: any = resolution === "4k" ? "4K" : resolution === "2k" ? "2K" : "1K";
                 
@@ -628,7 +629,8 @@ ${report}
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // In production, the file is run from /dist/server.cjs, so __dirname is /dist
+    const distPath = __dirname;
     app.use(express.static(distPath));
     app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
