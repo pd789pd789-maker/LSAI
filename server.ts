@@ -6,6 +6,10 @@ import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import "dotenv/config";
+import mongoose from "mongoose";
+import jwt from "jsonwebtoken";
+import apiRoutes from "./server/routes/api.js";
+import { User } from "./server/models/User.js";
 
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -36,8 +40,20 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  if (process.env.MONGODB_URI) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI);
+      console.log("MongoDB connected");
+    } catch (e: any) {
+      console.error("MongoDB connection error:", e.message);
+    }
+  } else {
+    console.warn("MONGODB_URI is not set. Database features will not work.");
+  }
+
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  app.use("/api", apiRoutes);
 
   console.log("Loaded CUSTOM_GEMINI_API_KEY:", !!process.env.CUSTOM_GEMINI_API_KEY);
   console.log("Loaded GEMINI_API_KEY:", !!process.env.GEMINI_API_KEY);
@@ -145,6 +161,31 @@ async function startServer() {
       const count = parseInt(req.body.count || "4", 10);
       const aspectRatio = req.body.aspectRatio || "3:4";
       const resolution = req.body.resolution || "1k";
+
+      let requiredPointsPerImage = 6;
+      if (resolution === "2k") requiredPointsPerImage = 8;
+      if (resolution === "4k") requiredPointsPerImage = 10;
+
+      let authEnabled = false;
+      let userDoc: any = null;
+
+      if (process.env.MONGODB_URI) {
+        authEnabled = true;
+        const authHeader = req.header("Authorization");
+        if (authHeader) {
+          try {
+            const token = authHeader.replace("Bearer ", "");
+            const decoded: any = jwt.verify(token, process.env.JWT_SECRET || "ai-studio-secret-key");
+            userDoc = await User.findById(decoded.id);
+          } catch(e) {}
+        }
+        if (!userDoc) {
+           throw new Error("请先登录，当前操作需要验证积分身份。");
+        }
+        if (userDoc.points < requiredPointsPerImage) {
+           throw new Error(`积分不足：每次生成至少需要 ${requiredPointsPerImage} 积分，您当前拥有 ${userDoc.points} 积分。`);
+        }
+      }
 
       // 1. 分析报告
       sendEvent({ type: "progress", progress: 20, message: "解析视觉美学..." });
@@ -402,6 +443,12 @@ ${report}
                 
                 if (!imageData) throw new Error("Gemini Image generation returned empty data.");
                 
+                if (authEnabled && userDoc) {
+                   userDoc.points -= requiredPointsPerImage;
+                   await userDoc.save();
+                   sendEvent({ type: "points_update", data: { points: userDoc.points } });
+                }
+
                 const tempId = `generated-${Date.now()}-${i}`;
                 imageCache.set(tempId, { buffer: Buffer.from(imageData, "base64"), mimetype: "image/png" });
                 const localUrl = `/api/temp-images/${tempId}`;
@@ -529,6 +576,12 @@ ${report}
             
             if (!imageUrl) throw new Error("未能获取图像URL");
             
+            if (authEnabled && userDoc) {
+               userDoc.points -= requiredPointsPerImage;
+               await userDoc.save();
+               sendEvent({ type: "points_update", data: { points: userDoc.points } });
+            }
+
             const payload = { imageUrl: imageUrl, caption: finalPrompt };
             sendEvent({ type: "image", index: i, data: payload });
             return imageUrl;
