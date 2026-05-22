@@ -129,8 +129,8 @@ async function startServer() {
   let oIndex = 0;
 
   async function callAIApi(isGemini: boolean, apiCall: (client: OpenAI, key: string, baseURL: string) => Promise<any>) {
-    const rawGemini = defaultGeminiKeys;
-    const rawOpenai = defaultOpenAIKeys;
+    const rawGemini = process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys;
+    const rawOpenai = process.env.CUSTOM_OPENAI_API_KEY || process.env.OPENAI_API_KEY || defaultOpenAIKeys;
     let keys = isGemini 
       ? rawGemini.split(",").map(k => k.trim()).filter(Boolean)
       : rawOpenai.split(",").map(k => k.trim()).filter(Boolean);
@@ -472,18 +472,13 @@ ${report}
                 effectivePrompt = `${tempImageUrl} ${finalPrompt}`;
             }
 
-            if (true) {
+            const currentGeminiKeysArray = (process.env.CUSTOM_GEMINI_API_KEY || process.env.GEMINI_API_KEY || defaultGeminiKeys).split(",").map(k => k.trim()).filter(Boolean);
+            const isAIzaKey = false;
+
+            if (isAIzaKey) {
                 // DEFAULT to Gemini Native Image Generation for speed
-                const geminiKey = (process.env.GEMINI_API_KEY || process.env.CUSTOM_GEMINI_API_KEY || defaultGeminiKeys).split(",")[0].trim();
-                let geminiBase = process.env.GEMINI_BASE_URL || "";
-                if (geminiBase.endsWith("/v1")) geminiBase = geminiBase.replace("/v1", "");
-                if (geminiBase.endsWith("/v1/")) geminiBase = geminiBase.replace("/v1/", "");
-                const ai = new GoogleGenAI({ 
-                    apiKey: geminiKey,
-                    httpOptions: geminiBase 
-                       ? { baseUrl: geminiBase } 
-                       : (!geminiKey.startsWith("AIza") ? { baseUrl: "https://api.apimart.ai" } : undefined)
-                });
+                const geminiKeysArray = currentGeminiKeysArray;
+                
                 const sizeMapGemini: any = resolution === "4k" ? "4K" : resolution === "2k" ? "2K" : "1K";
                 
                 let geminiRes;
@@ -494,8 +489,22 @@ ${report}
                     geminiParts.unshift({ inlineData: { data: refBase64, mimeType: refMime } });
                 }
 
-                for (let attempt = 0; attempt < 3; attempt++) {
+                const maxRetries = Math.max(3, geminiKeysArray.length);
+
+                for (let attempt = 0; attempt < maxRetries; attempt++) {
                     try {
+                        const geminiKey = geminiKeysArray[gIndex % geminiKeysArray.length];
+                        gIndex++;
+                        let geminiBase = process.env.GEMINI_BASE_URL || "";
+                        if (geminiBase.endsWith("/v1")) geminiBase = geminiBase.replace("/v1", "");
+                        if (geminiBase.endsWith("/v1/")) geminiBase = geminiBase.replace("/v1/", "");
+                        const ai = new GoogleGenAI({ 
+                            apiKey: geminiKey,
+                            httpOptions: geminiBase 
+                               ? { baseUrl: geminiBase } 
+                               : (!geminiKey.startsWith("AIza") ? { baseUrl: "https://api.apimart.ai" } : undefined)
+                        });
+
                         geminiRes = await ai.models.generateContent({
                             model: 'gemini-3.1-flash-image-preview',
                             contents: { parts: geminiParts },
@@ -511,7 +520,12 @@ ${report}
                     }
                 }
                 
-                if (!geminiRes) throw lastError;
+                if (!geminiRes) {
+                    if (lastError && lastError.message && lastError.message.includes("invalid API key")) {
+                        throw new Error("内置API Key已失效，请在代码或系统环境(Settings -> API Keys)中配置您自己的 GEMINI_API_KEY。");
+                    }
+                    throw lastError;
+                }
                 
                 let imageData = "";
                 let imageMime = "image/png";
@@ -537,7 +551,8 @@ ${report}
                 
             } else {
                 await callAIApi(false, async (client, key, baseURL) => {
-                  let sizeMap = "1024x1024";
+                  try {
+                      let sizeMap = "1024x1024";
                   if (aspectRatio === "3:4") {
                       if (resolution === "4k") sizeMap = "2448x3264";
                       else if (resolution === "2k") sizeMap = "1536x2048";
@@ -562,7 +577,7 @@ ${report}
                   }
 
                   const reqBody: any = {
-                      model: process.env.OPENAI_MODEL || "dall-e-3",
+                      model: process.env.OPENAI_MODEL || "gpt-image-2",
                       prompt: effectivePrompt,
                       n: 1,
                       size: sizeMap
@@ -667,6 +682,9 @@ ${report}
             const payload = { imageUrl: imageUrl, caption: finalPrompt };
             sendEvent({ type: "image", index: i, data: payload });
             return imageUrl;
+                  } catch (e: any) {
+                      throw e;
+                  }
             });
             } // Close else block
           } catch(e: any) {
