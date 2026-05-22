@@ -23,8 +23,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    user = new User({ email, password: hashedPassword });
-    await user.save();
+    user = await User.create({ email, password: hashedPassword });
 
     const payload = { id: user.id };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "10d" });
@@ -61,7 +60,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
+    const userResult = await User.findById(req.user.id);
+    const user = userResult ? userResult.select() : null;
     if (!user) {
       res.status(404).json({ message: "未找到该用户" });
       return;
@@ -74,7 +74,7 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
 
 export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const users = await User.find().select("-password").sort({ createdAt: -1 });
+    const users = User.find().select().sort();
     res.json(users);
   } catch (err: any) {
     res.status(500).json({ message: "服务器内部错误", error: err.message });
@@ -88,7 +88,8 @@ export const updateUserPoints = async (req: AuthRequest, res: Response): Promise
       res.status(400).json({ message: "无效的积分值" });
       return;
     }
-    const user = await User.findByIdAndUpdate(userId, { points }, { new: true }).select("-password");
+    const userResult = await User.findByIdAndUpdate(userId, { points }, { new: true });
+    const user = userResult ? userResult.select() : null;
     if (!user) {
       res.status(404).json({ message: "未找到该用户" });
       return;

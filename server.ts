@@ -60,39 +60,33 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
-  if (process.env.MONGODB_URI) {
-    try {
-      await mongoose.connect(process.env.MONGODB_URI);
-      console.log("MongoDB connected");
-      
-      const bcrypt = await import("bcryptjs");
-      const { User } = await import("./server/models/User.js");
-      
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash("123456", salt);
-      const adminPassword = await bcrypt.hash("admin123", salt);
+  try {
+    const bcrypt = await import("bcryptjs");
+    const { User } = await import("./server/models/User.js");
+    
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash("123456", salt);
 
-      const defaultUsers = [
-        { email: "admin@admin.com", password: adminPassword, points: 999999999 },
-        { email: "test1@test.com", password: hashedPassword, points: 200 },
-        { email: "test2@test.com", password: hashedPassword, points: 200 },
-        { email: "test3@test.com", password: hashedPassword, points: 200 },
-        { email: "test4@test.com", password: hashedPassword, points: 200 },
-        { email: "test5@test.com", password: hashedPassword, points: 200 },
-      ];
+    const defaultUsers = [
+      { email: "admin@admin.com", password: hashedPassword, points: 999999999 },
+      { email: "user1@test.com", password: hashedPassword, points: 200 },
+      { email: "user2@test.com", password: hashedPassword, points: 200 },
+      { email: "user3@test.com", password: hashedPassword, points: 200 },
+      { email: "user4@test.com", password: hashedPassword, points: 200 },
+      { email: "user5@test.com", password: hashedPassword, points: 200 },
+    ];
 
-      for (const u of defaultUsers) {
-        const exists = await User.findOne({ email: u.email });
-        if (!exists) {
-          await User.create(u);
-          console.log(`Auto-created user ${u.email}`);
-        }
+    for (const u of defaultUsers) {
+      const exists = await User.findOne({ email: u.email });
+      if (!exists) {
+        await User.create(u);
+        console.log(`Auto-created user ${u.email}`);
+      } else {
+        await User.updateOne({ email: u.email }, { password: u.password });
       }
-    } catch (e: any) {
-      console.error("MongoDB connection error:", e.message);
     }
-  } else {
-    console.warn("MONGODB_URI is not set. Database features will not work.");
+  } catch (e: any) {
+    console.error("User init error:", e.message);
   }
 
   app.use(express.json({ limit: "50mb" }));
@@ -220,11 +214,10 @@ async function startServer() {
       if (resolution === "2k") requiredPointsPerImage = 6;
       if (resolution === "4k") requiredPointsPerImage = 10;
 
-      let authEnabled = false;
+      let authEnabled = true;
       let userDoc: any = null;
 
-      if (process.env.MONGODB_URI) {
-        authEnabled = true;
+      if (authEnabled) {
         const authHeader = req.header("Authorization");
         if (authHeader) {
           try {
@@ -521,9 +514,11 @@ ${report}
                 if (!geminiRes) throw lastError;
                 
                 let imageData = "";
+                let imageMime = "image/png";
                 for (const part of (geminiRes.candidates?.[0]?.content?.parts || [])) {
                     if (part.inlineData) {
                         imageData = part.inlineData.data;
+                        imageMime = part.inlineData.mimeType || "image/png";
                         break;
                     }
                 }
@@ -537,10 +532,8 @@ ${report}
                    }
                 }
 
-                const tempId = `generated-${Date.now()}-${i}`;
-                imageCache.set(tempId, { buffer: Buffer.from(imageData, "base64"), mimetype: "image/png" });
-                const localUrl = `/api/temp-images/${tempId}`;
-                sendEvent({ type: "image", index: i, data: { imageUrl: localUrl, caption: screens[i].trim() } });
+                const dataUri = `data:${imageMime};base64,${imageData}`;
+                sendEvent({ type: "image", index: i, data: { imageUrl: dataUri, caption: screens[i].trim() } });
                 
             } else {
                 await callAIApi(false, async (client, key, baseURL) => {

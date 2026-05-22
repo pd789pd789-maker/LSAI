@@ -549,7 +549,12 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
               <h2 className="text-xl font-bold mb-2">内测登录</h2>
-              <p className="text-xs text-gray-500 mb-6">请输入后台为您分配的内测账号和密码</p>
+              <p className="text-xs text-gray-500 mb-2">请输入后台为您分配的内测账号和密码</p>
+              <div className="bg-gray-50 border border-gray-100 p-3 rounded-lg mb-6 text-xs text-gray-600 font-mono flex flex-col gap-1">
+                <div>Admin: admin@admin.com</div>
+                <div>User: user1@test.com ~ user5@test.com</div>
+                <div className="text-red-500 font-bold mt-1">统一内测密码: 123456</div>
+              </div>
               
               <form onSubmit={handleLogin} className="flex flex-col gap-4">
                 <div>
