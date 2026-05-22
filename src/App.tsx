@@ -50,30 +50,37 @@ export default function App() {
   const addToLibrary = (group: ImageGroup) => {
     const newLib = [group, ...library];
     setLibrary(newLib);
-    localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
+    try {
+      localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
+    } catch(e) {}
   };
 
   const updateCurrentGroupInLibrary = (group: ImageGroup) => {
     const safeGroup = { ...group, results: group.results.filter(Boolean) };
     setLibrary(prev => {
       const idx = prev.findIndex(g => g.id === safeGroup.id);
+      let newLib;
       if (idx !== -1) {
-        const newLib = [...prev];
+        newLib = [...prev];
         newLib[idx] = safeGroup;
-        localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
-        return newLib;
       } else {
-        const newLib = [safeGroup, ...prev];
-        localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
-        return newLib;
+        newLib = [safeGroup, ...prev];
       }
+      try {
+        localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
+      } catch (e) {
+        console.warn("localStorage quota exceeded, unable to save to library");
+      }
+      return newLib;
     });
   };
 
   const deleteGroup = (id: string) => {
     const newLib = library.filter(g => g.id !== id);
     setLibrary(newLib);
-    localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
+    try {
+      localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
+    } catch (e) {}
   };
 
   const downloadGroup = async (group: ImageGroup) => {
@@ -253,17 +260,17 @@ export default function App() {
 
     abortControllerRef.current = new AbortController();
 
-    const formData = new FormData();
-    const compressedFiles = await Promise.all(selectedFiles.map(compressImage));
-    compressedFiles.forEach(file => {
-      formData.append("images", file);
-    });
-    formData.append("description", description);
-    formData.append("aspectRatio", aspectRatio);
-    formData.append("resolution", resolution);
-    formData.append("count", count.toString());
-
     try {
+      const formData = new FormData();
+      const compressedFiles = await Promise.all(selectedFiles.map(compressImage));
+      compressedFiles.forEach(file => {
+        formData.append("images", file);
+      });
+      formData.append("description", description);
+      formData.append("aspectRatio", aspectRatio);
+      formData.append("resolution", resolution);
+      formData.append("count", count.toString());
+
       const response = await fetch("/api/generate-images", {
         method: "POST",
         headers: { "Accept": "text/event-stream" },

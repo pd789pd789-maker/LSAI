@@ -18,6 +18,20 @@ const upload = multer({
 
 const imageCache = new Map<string, { buffer: Buffer, mimetype: string }>();
 
+const fetchWithTimeout = async (url: string, options: any = {}, timeoutMs = 30000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return res;
+  } catch (err: any) {
+    clearTimeout(id);
+    if (err.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs}ms`);
+    throw err;
+  }
+};
+
 function parseSSEString(sseStr: string) {
   let text = "";
   const lines = sseStr.split('\n');
@@ -130,6 +144,7 @@ async function startServer() {
   }
 
   app.post("/api/generate-images", upload.any(), async (req, res) => {
+    console.log(`[API] /api/generate-images called. body=`, req.body);
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -502,14 +517,14 @@ ${report}
                       }
                   }
               
-              const imgRes: any = await fetch(`${baseURL.replace(/\/$/, '')}/images/generations`, {
+              const imgRes: any = await fetchWithTimeout(`${baseURL.replace(/\/$/, '')}/images/generations`, {
                   method: "POST",
                   headers: {
                       "Content-Type": "application/json",
                       "Authorization": `Bearer ${key}`
                   },
                   body: JSON.stringify(reqBody)
-              }).then(async r => {
+              }, 60000).then(async (r: any) => {
                   const text = await r.text();
                   try {
                       return JSON.parse(text);
@@ -540,9 +555,9 @@ ${report}
                          message: `渲染中... ${attempts * 2}s`
                        });
                        try {
-                         const statusRes = await fetch(`${baseURL.replace(/\/$/, '')}/tasks/${taskId}`, {
+                         const statusRes = await fetchWithTimeout(`${baseURL.replace(/\/$/, '')}/tasks/${taskId}`, {
                             headers: { "Authorization": `Bearer ${key}` }
-                         }).then((r: any) => r.json());
+                         }, 20000).then((r: any) => r.json());
                          
                          if (statusRes.error) {
                             throw new Error(statusRes.error.message || JSON.stringify(statusRes.error));
@@ -611,6 +626,6 @@ ${report}
     app.get("*", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+  app.listen(Number(PORT), "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
 }
 startServer();
