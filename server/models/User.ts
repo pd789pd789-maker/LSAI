@@ -1,3 +1,4 @@
+import mongoose, { Schema } from "mongoose";
 import { randomUUID } from "crypto";
 import fs from "fs";
 
@@ -7,10 +8,11 @@ export interface IUser {
   email: string;
   password?: string;
   points: number;
+  library?: any[];
   createdAt: Date;
 }
 
-const DB_FILE = "users.json";
+const DB_FILE = process.env.DATA_DIR ? `${process.env.DATA_DIR}/users.json` : (fs.existsSync("/data") ? "/data/users.json" : "users.json");
 
 function loadUsers(): IUser[] {
   try {
@@ -23,17 +25,21 @@ function loadUsers(): IUser[] {
 }
 
 function saveUsers(users: IUser[]) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 2));
+  try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 2));
+  } catch (err) {
+      console.error("Failed to save users:", err.message);
+  }
 }
 
-let users: IUser[] = loadUsers();
+let localUsers: IUser[] = loadUsers();
 
-export const User = {
+const LocalUserMock = {
   findOne: async (query: { email: string }) => {
-    return users.find(u => u.email === query.email) || null;
+    return localUsers.find(u => u.email === query.email) || null;
   },
   findById: async (id: string) => {
-    const user = users.find(u => u._id === id || u.id === id);
+    const user = localUsers.find(u => u._id === id || u.id === id);
     if (!user) return null;
     return {
        ...user,
@@ -46,26 +52,26 @@ export const User = {
   },
   create: async (data: any) => {
     const newUser: IUser = {
-      _id: randomUUID(),
-      id: randomUUID(),
       ...data,
-      createdAt: new Date(),
+      _id: data._id || randomUUID(),
+      id: data.id || randomUUID(),
+      createdAt: data.createdAt || new Date(),
       points: data.points ?? 100
     };
-    users.push(newUser);
-    saveUsers(users);
+    localUsers.push(newUser);
+    saveUsers(localUsers);
     return newUser;
   },
   updateOne: async (query: { email: string }, data: any) => {
-    const user = users.find(u => u.email === query.email);
+    const user = localUsers.find(u => u.email === query.email);
     if (user) {
       if (data.password) user.password = data.password;
-      saveUsers(users);
+      saveUsers(localUsers);
     }
     return user;
   },
   findByIdAndUpdate: async (id: string, update: any, options?: any) => {
-    const user = users.find(u => u._id === id || u.id === id);
+    const user = localUsers.find(u => u._id === id || u.id === id);
     if (user) {
       if (update.$inc && update.$inc.points !== undefined) {
         user.points += update.$inc.points;
@@ -73,7 +79,17 @@ export const User = {
       if (update.points !== undefined) {
          user.points = update.points;
       }
-      saveUsers(users);
+      if (update.$push && update.$push.library) {
+         if (!user.library) user.library = [];
+         
+         const toPush = update.$push.library;
+         if (toPush.$each) {
+            user.library.push(...toPush.$each);
+         } else {
+            user.library.push(toPush);
+         }
+      }
+      saveUsers(localUsers);
     }
     const result = user ? { ...user } : null;
     if (!result) return null;
@@ -90,7 +106,7 @@ export const User = {
     return {
       select: () => ({
         sort: () => {
-          const clones = users.map(u => {
+          const clones = localUsers.map(u => {
             const copy = {...u};
             delete copy.password;
             return copy;
@@ -101,4 +117,18 @@ export const User = {
     };
   }
 };
+
+const userSchema = new Schema<IUser>({
+  _id: { type: String, default: () => randomUUID() },
+  id: { type: String, default: () => randomUUID() },
+  email: { type: String, required: true, unique: true },
+  password: { type: String },
+  points: { type: Number, default: 100 },
+  library: { type: [Schema.Types.Mixed], default: [] },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const MongooseUser = (mongoose.models.User as mongoose.Model<IUser>) || mongoose.model<IUser>("User", userSchema);
+
+export const User = process.env.MONGODB_URI ? MongooseUser : LocalUserMock as any;
 

@@ -14,6 +14,13 @@ import { createServer as createViteServer } from "vite";
 import "dotenv/config";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log("Connected to MongoDB successfully"))
+    .catch(err => console.error("MongoDB connection error:", err));
+}
+
 import apiRoutes from "./server/routes/api.js";
 import { User } from "./server/models/User.js";
 
@@ -193,18 +200,26 @@ async function startServer() {
     // Write 2KB of padding to force Cloud Run/Nginx to flush the response headers immediately
     res.write(Array(2048).fill(' ').join('') + "\n");
     
-    let isCancelled = false;
+    let isClientConnected = true;
     const pingInterval = setInterval(() => {
-        if (!isCancelled) res.write(JSON.stringify({ type: "ping", padding: Array(256).fill(' ').join('') }) + "\n");
+        if (isClientConnected && !res.socket?.destroyed) {
+            try { res.write(JSON.stringify({ type: "ping", padding: Array(256).fill(' ').join('') }) + "\n"); } catch (e) {}
+        } else {
+            clearInterval(pingInterval);
+        }
     }, 10000);
 
     res.on("close", () => { 
-        isCancelled = true; 
+        isClientConnected = false; 
         clearInterval(pingInterval);
     });
 
     const sendEvent = (event: any) => {
-      if (!isCancelled) res.write(JSON.stringify(event) + "\n");
+      if (isClientConnected && !res.socket?.destroyed) {
+         try {
+             res.write(JSON.stringify(event) + "\n");
+         } catch (e) {}
+      }
     };
 
     try {
@@ -456,7 +471,6 @@ ${report}
           const ret = [];
           const executing: Promise<any>[] = [];
           for (let i = 0; i < array.length; i++) {
-              if (isCancelled) return;
               const p = Promise.resolve().then(() => iteratorFn(array[i], i));
               ret.push(p);
               if (poolLimit <= array.length) {
@@ -469,8 +483,7 @@ ${report}
       }
 
       const concurrencyLimit = 13; // Match the number of default OpenAI keys to avoid rate limit delays.
-      await asyncPool(concurrencyLimit, Array.from({ length: limit }), async (_, i) => {
-          if (isCancelled) return;
+      const generatedImages = await asyncPool(concurrencyLimit, Array.from({ length: limit }), async (_, i) => {
           sendEvent({ type: "image_start", index: i });
           
           try {
@@ -648,7 +661,7 @@ ${report}
                     const taskId = imgRes.data[0].task_id;
                     let completed = false;
                     let attempts = 0;
-                    while (!completed && attempts < 80 && !isCancelled) {
+                    while (!completed && attempts < 80) {
                        await new Promise(r => setTimeout(r, 2000));
                        sendEvent({ 
                          type: "image_progress", 
@@ -711,8 +724,28 @@ ${report}
           } catch(e: any) {
             console.error(`Error generating image ${i}:`, e.message);
             sendEvent({ type: "image", index: i, data: { error: e.message || "Failed", caption: screens[i]?.trim() || "Image Generation Failed" } });
+            return { error: e.message || "Failed" };
           }
       });
+
+      if (userDoc) {
+          const results = generatedImages.map(img => {
+              if (typeof img === "string") return { imageUrl: img };
+              if (img && typeof img === "object" && img.error) return { error: img.error };
+              return { error: "Unknown error" };
+          }).filter(r => r.imageUrl || r.error);
+
+          if (results.length > 0) {
+              const libraryEntry = {
+                  id: Date.now().toString(),
+                  timestamp: Date.now(),
+                  prompts: String(resPrompts?.choices[0]?.message?.content || ""),
+                  copywriting: String(resCopy?.choices[0]?.message?.content || ""),
+                  results: results
+              };
+              await User.findByIdAndUpdate(userDoc._id, { $push: { library: { $each: [libraryEntry], $position: 0 } } });
+          }
+      }
 
       sendEvent({ type: "done" });
     } catch (e: any) {

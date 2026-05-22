@@ -123,3 +123,39 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     res.status(500).json({ message: "服务器内部错误", error: err.message });
   }
 };
+
+export const getLibrary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+     const user = await User.findById(req.user?.id);
+     if (!user) {
+        res.status(404).json({ message: "User not found" });
+        return;
+     }
+     res.json({ library: user.library || [] });
+  } catch (e: any) {
+     res.status(500).json({ message: "Server error", error: e.message });
+  }
+};
+
+export const syncLibrary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+     const user = await User.findById(req.user?.id);
+     if (!user) {
+        res.status(404).json({ message: "User not found" });
+        return;
+     }
+     const { items } = req.body;
+     const currentLib = user.library || [];
+     const existingIds = new Set(currentLib.map((item: any) => item.id));
+     const newItems = (items || []).filter((item: any) => !existingIds.has(item.id));
+     
+     if (newItems.length > 0) {
+        await User.findByIdAndUpdate(user._id, { $push: { library: { $each: newItems, $position: 0 } } });
+     }
+     
+     const updatedUser = await User.findById(req.user?.id);
+     res.json({ library: updatedUser.library || [] });
+  } catch (e: any) {
+     res.status(500).json({ message: "Server error", error: e.message });
+  }
+};

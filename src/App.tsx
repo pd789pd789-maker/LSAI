@@ -108,12 +108,43 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (user && token) {
+      fetch("/api/user/library", { headers: { "Authorization": `Bearer ${token}` } })
+        .then(r => r.json())
+        .then(data => {
+            if (data.library) {
+               setLibrary((prev) => {
+                   const m = new Map();
+                   for (const item of prev) m.set(item.id, item);
+                   for (const item of data.library) m.set(item.id, item);
+                   const merged = Array.from(m.values()).sort((a, b) => b.timestamp - a.timestamp);
+                   try { localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(merged)); } catch(e){}
+                   return merged;
+               });
+            }
+        }).catch(e => console.error(e));
+    }
+  }, [user, token]);
+
+  const syncLibraryToBackend = async (newLib: ImageGroup[]) => {
+      if (!token) return;
+      try {
+          await fetch("/api/user/library", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+              body: JSON.stringify({ items: newLib })
+          });
+      } catch (e) {}
+  };
+
   const addToLibrary = (group: ImageGroup) => {
     const newLib = [group, ...library];
     setLibrary(newLib);
     try {
       localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
     } catch(e) {}
+    syncLibraryToBackend(newLib);
   };
 
   const updateCurrentGroupInLibrary = (group: ImageGroup) => {
@@ -132,6 +163,7 @@ export default function App() {
       } catch (e) {
         console.warn("localStorage quota exceeded, unable to save to library");
       }
+      syncLibraryToBackend(newLib);
       return newLib;
     });
   };
