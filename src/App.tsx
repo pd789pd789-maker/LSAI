@@ -223,9 +223,13 @@ export default function App() {
 
     const compressImage = (file: File): Promise<File> => {
       return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => resolve(file), 5000);
         const img = new Image();
-        img.src = URL.createObjectURL(file);
+        const objUrl = URL.createObjectURL(file);
+        img.src = objUrl;
         img.onload = () => {
+          clearTimeout(timeoutId);
+          URL.revokeObjectURL(objUrl);
           const canvas = document.createElement("canvas");
           let { width, height } = img;
           const maxDim = 800;
@@ -254,7 +258,7 @@ export default function App() {
             resolve(file);
           }
         };
-        img.onerror = () => resolve(file);
+        img.onerror = () => { clearTimeout(timeoutId); URL.revokeObjectURL(objUrl); resolve(file); };
       });
     };
 
@@ -308,8 +312,9 @@ export default function App() {
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
           
-          for (const line of lines) {
+          for (let line of lines) {
              if (line.trim() === "") continue;
+             if (line.startsWith("STREAM: ")) line = line.substring(8);
              try {
                 const event = JSON.parse(line);
                 if (event.type === "progress") {
@@ -355,8 +360,10 @@ export default function App() {
       }
       
       if (buffer.trim() !== "") {
+         let jsonStr = buffer.trim();
+         if (jsonStr.startsWith("STREAM: ")) jsonStr = jsonStr.substring(8);
          try {
-            const event = JSON.parse(buffer);
+            const event = JSON.parse(jsonStr);
             if (event.type === "progress") {
                setProgress(event.progress);
                setProgressMsg(event.message);
@@ -537,7 +544,7 @@ export default function App() {
                         <div className="flex flex-wrap gap-2 w-full">
                           {previewUrls.map((url, idx) => (
                             <div key={idx} className="relative aspect-square w-16 md:w-20 rounded-lg overflow-hidden shadow-sm group/item">
-                              <img src={url} alt={`Preview ${idx + 1}`} className="w-full h-full object-cover" />
+                              <img referrerPolicy="no-referrer" src={url} alt={`Preview ${idx + 1}`} className="w-full h-full object-cover" />
                               <div 
                                 className="absolute inset-0 bg-black/50 opacity-0 group-hover/item:opacity-100 flex items-center justify-center transition-opacity cursor-pointer text-white text-xs"
                                 onClick={(e) => removeFile(e, idx)}
@@ -708,6 +715,7 @@ export default function App() {
                             <div key={idx} className="bg-gray-50 rounded-xl md:rounded-2xl overflow-hidden border border-gray-100 shadow-sm relative aspect-[3/4] flex flex-col items-center justify-center p-4">
                                {genState?.imageUrl ? (
                                   <motion.img 
+                                    referrerPolicy="no-referrer"
                                     initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                                     src={genState.imageUrl || undefined} className="absolute inset-0 w-full h-full object-cover" alt="Draft" 
                                   />
@@ -755,6 +763,7 @@ export default function App() {
                             >
                                <div className="relative aspect-[3/4] bg-gray-100 overflow-hidden">
                                   <img 
+                                    referrerPolicy="no-referrer"
                                     src={item.imageUrl || undefined} 
                                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                                     alt={`Shot ${idx+1}`}
@@ -871,7 +880,7 @@ export default function App() {
                                   <span className="text-[10px] text-red-500 font-medium leading-tight">{img.error}</span>
                                </div>
                              ) : (
-                               <img src={img.imageUrl || undefined} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="lib" loading="lazy" />
+                               <img referrerPolicy="no-referrer" src={img.imageUrl || undefined} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="lib" loading="lazy" />
                              )}
                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3">
                                 <div className="flex justify-end gap-1.5">
@@ -989,6 +998,7 @@ export default function App() {
                <ChevronRight className="w-8 h-8 md:w-10 md:h-10" />
             </button>
             <motion.img 
+              referrerPolicy="no-referrer"
               key={previewState.images[previewState.index]}
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}

@@ -2,6 +2,12 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import cors from "cors";
+
+// Ensure NODE_ENV defaults to production when running bundled server.cjs natively
+if (process.env.NODE_ENV === undefined && __dirname.includes('dist')) {
+  process.env.NODE_ENV = "production";
+}
+
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
@@ -622,10 +628,11 @@ ${report}
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(__dirname));
-    app.get("*", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(Number(PORT), "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+  app.listen(Number(PORT), () => console.log(`Server running on port ${PORT}`));
 }
 startServer();
