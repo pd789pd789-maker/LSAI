@@ -25,7 +25,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     user = await User.create({ email, password: hashedPassword });
 
-    const payload = { id: user.id };
+    const payload = { id: user._id || user.id };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "10d" });
 
     res.status(201).json({ token, user: { email: user.email, points: user.points } });
@@ -49,7 +49,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
        return;
     }
 
-    const payload = { id: user.id };
+    const payload = { id: user._id || user.id };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "10d" });
 
     res.json({ token, user: { email: user.email, points: user.points } });
