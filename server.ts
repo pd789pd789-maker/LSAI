@@ -483,6 +483,7 @@ ${report}
       }
 
       const concurrencyLimit = 13; // Match the number of default OpenAI keys to avoid rate limit delays.
+      console.log(`[Background] Starting generation of ${limit} image(s)...`);
       const generatedImages = await asyncPool(concurrencyLimit, Array.from({ length: limit }), async (_, i) => {
           sendEvent({ type: "image_start", index: i });
           
@@ -582,9 +583,10 @@ ${report}
 
                 const dataUri = `data:${imageMime};base64,${imageData}`;
                 sendEvent({ type: "image", index: i, data: { imageUrl: dataUri, caption: screens[i].trim() } });
-                
+                console.log(`[Background] Image ${i} completed successfully.`);
+                return dataUri;
             } else {
-                await callAIApi(false, async (client, key, baseURL) => {
+                return await callAIApi(false, async (client, key, baseURL) => {
                   try {
                       let sizeMap = "1024x1024";
                   if (aspectRatio === "3:4") {
@@ -714,6 +716,7 @@ ${report}
             }
 
             const payload = { imageUrl: imageUrl, caption: finalPrompt };
+            console.log(`[Background] Image ${i} completed successfully.`);
             sendEvent({ type: "image", index: i, data: payload });
             return imageUrl;
                   } catch (e: any) {
