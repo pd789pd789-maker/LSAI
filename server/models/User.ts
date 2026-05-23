@@ -38,15 +38,23 @@ const LocalUserMock = {
   findOne: async (query: { email: string }) => {
     return localUsers.find(u => u.email === query.email) || null;
   },
-  findById: async (id: string) => {
-    const user = localUsers.find(u => u._id === id || u.id === id);
-    if (!user) return null;
+  findById: (id: string) => {
     return {
-       ...user,
        select: () => {
-          const u = {...user};
-          delete u.password;
-          return u;
+          return {
+             then: (resolve: any) => {
+                const user = localUsers.find(u => u._id === id || u.id === id);
+                if (!user) return resolve(null);
+                const u = {...user};
+                delete u.password;
+                resolve(u);
+             }
+          }
+       },
+       then: (resolve: any) => {
+          const user = localUsers.find(u => u._id === id || u.id === id);
+          if (!user) return resolve(null);
+          resolve({...user});
        }
     };
   },
@@ -70,35 +78,62 @@ const LocalUserMock = {
     }
     return user;
   },
-  findByIdAndUpdate: async (id: string, update: any, options?: any) => {
-    const user = localUsers.find(u => u._id === id || u.id === id);
-    if (user) {
-      if (update.$inc && update.$inc.points !== undefined) {
-        user.points += update.$inc.points;
-      }
-      if (update.points !== undefined) {
-         user.points = update.points;
-      }
-      if (update.$push && update.$push.library) {
-         if (!user.library) user.library = [];
-         
-         const toPush = update.$push.library;
-         if (toPush.$each) {
-            user.library.push(...toPush.$each);
-         } else {
-            user.library.push(toPush);
-         }
-      }
-      saveUsers(localUsers);
-    }
-    const result = user ? { ...user } : null;
-    if (!result) return null;
+  findByIdAndUpdate: (id: string, update: any, options?: any) => {
     return {
-       ...result,
        select: () => {
-         const u = {...result};
-         delete u.password;
-         return u;
+          return {
+             then: (resolve: any) => {
+                const user = localUsers.find(u => u._id === id || u.id === id);
+                if (user) {
+                  if (update.$inc && update.$inc.points !== undefined) {
+                    user.points += update.$inc.points;
+                  }
+                  if (update.points !== undefined) {
+                     user.points = update.points;
+                  }
+                  if (update.$push && update.$push.library) {
+                     if (!user.library) user.library = [];
+                     
+                     const toPush = update.$push.library;
+                     if (toPush.$each) {
+                        user.library.push(...toPush.$each);
+                     } else {
+                        user.library.push(toPush);
+                     }
+                  }
+                  saveUsers(localUsers);
+                }
+                const result = user ? { ...user } : null;
+                if (!result) return resolve(null);
+                delete result.password;
+                resolve(result);
+             }
+          }
+       },
+       then: (resolve: any) => {
+          const user = localUsers.find(u => u._id === id || u.id === id);
+          if (user) {
+            if (update.$inc && update.$inc.points !== undefined) {
+              user.points += update.$inc.points;
+            }
+            if (update.points !== undefined) {
+               user.points = update.points;
+            }
+            if (update.$push && update.$push.library) {
+               if (!user.library) user.library = [];
+               
+               const toPush = update.$push.library;
+               if (toPush.$each) {
+                  user.library.push(...toPush.$each);
+               } else {
+                  user.library.push(toPush);
+               }
+            }
+            saveUsers(localUsers);
+          }
+          const result = user ? { ...user } : null;
+          if (!result) return resolve(null);
+          resolve(result);
        }
     };
   },
@@ -111,7 +146,7 @@ const LocalUserMock = {
             delete copy.password;
             return copy;
           });
-          return clones.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          return Promise.resolve(clones.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
         }
       })
     };

@@ -60,8 +60,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const userResult = await User.findById(req.user.id);
-    const user = userResult ? userResult.select() : null;
+    const user = await User.findById(req.user.id).select("-password");
     if (!user) {
       res.status(404).json({ message: "未找到该用户" });
       return;
@@ -74,7 +73,7 @@ export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
 
 export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const users = User.find().select().sort();
+    const users = await User.find({}).select("-password").sort({ createdAt: -1 });
     res.json(users);
   } catch (err: any) {
     res.status(500).json({ message: "服务器内部错误", error: err.message });
@@ -88,8 +87,7 @@ export const updateUserPoints = async (req: AuthRequest, res: Response): Promise
       res.status(400).json({ message: "无效的积分值" });
       return;
     }
-    const userResult = await User.findByIdAndUpdate(userId, { points }, { new: true });
-    const user = userResult ? userResult.select() : null;
+    const user = await User.findByIdAndUpdate(userId, { points }, { new: true }).select("-password");
     if (!user) {
       res.status(404).json({ message: "未找到该用户" });
       return;
