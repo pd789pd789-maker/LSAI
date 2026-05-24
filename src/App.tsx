@@ -999,7 +999,7 @@ export default function App() {
                       </div>
 
                       {/* Copywriting Section */}
-                      {currentGroup.copywriting && currentGroup.copywriting.length > 0 && (
+                      {Array.isArray(currentGroup.copywriting) && currentGroup.copywriting.length > 0 && (
                         <div className="mt-12 md:mt-16 border-t border-gray-100 pt-8 md:pt-10">
                           <h3 className="font-bold text-base md:text-lg text-[#111] mb-6 flex items-center gap-2">
                              <span className="w-2 h-2 bg-[#FF2442] rounded-full"></span> 
@@ -1136,7 +1136,7 @@ export default function App() {
                       </div>
 
                       {/* Copywriting Section */}
-                      {group.copywriting && group.copywriting.length > 0 && (
+                      {Array.isArray(group.copywriting) && group.copywriting.length > 0 && (
                         <div className="mt-8 border-t border-gray-100 pt-6">
                           <h3 className="font-bold text-base md:text-lg text-[#111] mb-6 flex items-center gap-2">
                              <span className="w-2 h-2 bg-[#FF2442] rounded-full"></span> 
