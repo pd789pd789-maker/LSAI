@@ -142,17 +142,12 @@ export const syncLibrary = async (req: AuthRequest, res: Response): Promise<void
         res.status(404).json({ message: "User not found" });
         return;
      }
+
      const { items } = req.body;
-     const currentLib = user.library || [];
-     const existingIds = new Set(currentLib.map((item: any) => item.id));
-     const newItems = (items || []).filter((item: any) => !existingIds.has(item.id));
-     
-     if (newItems.length > 0) {
-        await User.findByIdAndUpdate(user._id, { $push: { library: { $each: newItems, $position: 0 } } });
-     }
+     await User.findByIdAndUpdate(user._id, { library: items || [] });
      
      const updatedUser = await User.findById(req.user?.id);
-     res.json({ library: updatedUser.library || [] });
+     res.json({ library: updatedUser?.library || [] });
   } catch (e: any) {
      res.status(500).json({ message: "Server error", error: e.message });
   }

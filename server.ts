@@ -732,22 +732,7 @@ ${report}
       });
 
       if (userDoc) {
-          const results = generatedImages.map(img => {
-              if (typeof img === "string") return { imageUrl: img };
-              if (img && typeof img === "object" && img.error) return { error: img.error };
-              return { error: "Unknown error" };
-          }).filter(r => r.imageUrl || r.error);
-
-          if (results.length > 0) {
-              const libraryEntry = {
-                  id: Date.now().toString(),
-                  timestamp: Date.now(),
-                  prompts: String(resPrompts?.choices[0]?.message?.content || ""),
-                  copywriting: String(resCopy?.choices[0]?.message?.content || ""),
-                  results: results
-              };
-              await User.findByIdAndUpdate(userDoc._id, { $push: { library: { $each: [libraryEntry], $position: 0 } } });
-          }
+          // Frontend now handles library syncing to avoid duplicates
       }
 
       sendEvent({ type: "done" });

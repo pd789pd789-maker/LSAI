@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { UploadCloud, Image as ImageIcon, Sparkles, Loader2, RefreshCcw, Download, Trash2, Home, FolderOpen, ArrowRight, Settings2, PackageSearch, Check, X, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { UploadCloud, Image as ImageIcon, Sparkles, Loader2, RefreshCcw, Download, Trash2, Home, FolderOpen, ArrowRight, Settings2, PackageSearch, Check, X, AlertCircle, ChevronLeft, ChevronRight, LogOut, Shield } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { motion, AnimatePresence } from "motion/react";
@@ -57,9 +57,7 @@ export default function App() {
         const data = await res.json();
         setUser(data);
       } else {
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem("AUTH_TOKEN");
+        handleLogout();
       }
     } catch(e) {
       console.error("Fetch me failed:", e);
@@ -71,6 +69,15 @@ export default function App() {
       fetchMe(token);
     }
   }, [token]);
+
+  const handleLogout = () => {
+    setToken(null);
+    setUser(null);
+    setLibrary([]);
+    localStorage.removeItem("AUTH_TOKEN");
+    localStorage.removeItem("LIFESTYLE_LIBRARY");
+    setCurrentView('home');
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -229,6 +236,22 @@ export default function App() {
   const [currentGroup, setCurrentGroup] = useState<ImageGroup | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [previewState, setPreviewState] = useState<{ images: string[], index: number } | null>(null);
+  
+  const openPreview = (results: any[], clickedIdx: number) => {
+    const validImages: string[] = [];
+    let targetIndex = 0;
+    for (let i = 0; i < results.length; i++) {
+        const item = results[i];
+        if (item && item.imageUrl) {
+            if (i === clickedIdx) targetIndex = validImages.length;
+            validImages.push(item.imageUrl);
+        }
+    }
+    if (validImages.length > 0) {
+        setPreviewState({ images: validImages, index: targetIndex });
+    }
+  };
+
   const [showToast, setShowToast] = useState(false);
   
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -381,9 +404,7 @@ export default function App() {
       });
 
       if (response.status === 401) {
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem("AUTH_TOKEN");
+        handleLogout();
         setShowLoginModal(true);
         throw new Error("登录已过期或积分验证失败，请重新登录");
       }
@@ -666,12 +687,7 @@ export default function App() {
             </div>
           )}
           <button 
-            onClick={() => {
-              setToken(null);
-              setUser(null);
-              localStorage.removeItem("AUTH_TOKEN");
-              setCurrentView('home');
-            }}
+            onClick={handleLogout}
             className="w-full flex justify-center items-center gap-2 py-3 rounded-xl border border-gray-200 text-xs font-semibold text-gray-500 hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
           >
              退出登录
@@ -936,7 +952,7 @@ export default function App() {
                             >
                                <div 
                                  className="relative aspect-[3/4] bg-gray-100 overflow-hidden cursor-pointer"
-                                 onClick={() => setPreviewState({ images: currentGroup.results.map((r: any) => r?.imageUrl || ""), index: idx })}
+                                onClick={() => openPreview(currentGroup.results, idx)}
                                >
                                   <img 
                                     referrerPolicy="no-referrer"
@@ -953,7 +969,7 @@ export default function App() {
                                       <Download className="w-3.5 h-3.5" />
                                     </button>
                                     <button 
-                                      onClick={() => setPreviewState({ images: currentGroup.results.filter(Boolean).map(r => r.imageUrl || ""), index: idx })}
+                                      onClick={() => openPreview(currentGroup.results, idx)}
                                       className="bg-white/90 p-2 rounded-full hover:bg-white shadow text-[#111] active:scale-90 transition-transform"
                                       title="鉴赏全图"
                                     >
@@ -1062,13 +1078,13 @@ export default function App() {
                                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 cursor-pointer" 
                                  alt="lib" 
                                  loading="lazy" 
-                                 onClick={() => setPreviewState({ images: group.results.map(r => r.imageUrl || ""), index: i })}
+                                 onClick={() => openPreview(group.results, i)}
                                />
                              )}
                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3">
                                 <div className="flex justify-end gap-1.5">
                                    <button 
-                                     onClick={() => setPreviewState({ images: group.results.map(r => r.imageUrl || ""), index: i })}
+                                     onClick={() => openPreview(group.results, i)}
                                      className="bg-white/20 p-2 rounded-lg hover:bg-white/40 backdrop-blur active:scale-95 transition"
                                      title="鉴赏全图"
                                    >
@@ -1103,6 +1119,41 @@ export default function App() {
                           </div>
                         ))}
                       </div>
+
+                      {/* Copywriting Section */}
+                      {group.copywriting && group.copywriting.length > 0 && (
+                        <div className="mt-8 border-t border-gray-100 pt-6">
+                          <h3 className="font-bold text-base md:text-lg text-[#111] mb-6 flex items-center gap-2">
+                             <span className="w-2 h-2 bg-[#FF2442] rounded-full"></span> 
+                             场景匹配爆款文案
+                          </h3>
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5">
+                             {group.copywriting.map((copy, idx) => (
+                               <motion.div 
+                                 initial={{ y: 20, opacity: 0 }}
+                                 animate={{ y: 0, opacity: 1 }}
+                                 transition={{ delay: 0.2 + (idx * 0.1) }}
+                                 key={idx} 
+                                 className="bg-gray-50/50 hover:bg-white border-2 border-transparent hover:border-gray-100 rounded-2xl p-5 md:p-6 flex flex-col relative group transition-all shadow-sm hover:shadow-lg"
+                               >
+                                  <div className="flex justify-between items-start mb-4">
+                                     <h4 className="font-bold text-sm text-[#111] pr-10 leading-snug tracking-wide">{copy.title}</h4>
+                                     <button 
+                                        onClick={() => copyToClipboard(`${copy.title}\n\n${copy.content}`)}
+                                        className="absolute top-5 right-5 bg-white border border-gray-200 text-gray-500 hover:text-[#FF2442] hover:border-[#FF2442] p-2 rounded-xl transition-all shadow-sm active:scale-95"
+                                        title="一键复制到剪贴板"
+                                     >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                     </button>
+                                  </div>
+                                  <div className="text-[11px] md:text-xs text-gray-600 leading-relaxed overflow-y-auto max-h-40 md:max-h-48 mb-2 whitespace-pre-wrap flex-1 scrollbar-hide font-sans">
+                                     {copy.content}
+                                  </div>
+                               </motion.div>
+                             ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1118,7 +1169,7 @@ export default function App() {
       </main>
 
       {/* Mobile Bottom Navigation */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 backdrop-blur-lg border-t border-gray-200 flex justify-around items-center z-40 px-4 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.05)]">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 backdrop-blur-lg border-t border-gray-200 flex justify-around items-center z-40 px-2 pb-safe shadow-[0_-5px_15px_rgba(0,0,0,0.05)]">
         <button 
           onClick={() => setTab('generate')}
           className={cn("flex flex-col items-center gap-1", tab === 'generate' ? "text-[#111]" : "text-gray-400")}
@@ -1128,21 +1179,41 @@ export default function App() {
         </button>
         
         <button 
-          onClick={() => setCurrentView('home')}
-          className="flex flex-col items-center gap-1 text-gray-400 -mt-6"
-        >
-           <div className="bg-[#111] w-12 h-12 rounded-full flex items-center justify-center border-4 border-[#F5F6F8] shadow-sm transform hover:scale-105 active:scale-95 transition-all">
-              <Home className="w-5 h-5 text-white" />
-           </div>
-        </button>
-
-        <button 
           onClick={() => setTab('library')}
           className={cn("flex flex-col items-center gap-1", tab === 'library' ? "text-[#111]" : "text-gray-400")}
         >
           <FolderOpen className="w-5 h-5" />
           <span className="text-[10px] font-bold">灵感典藏</span>
         </button>
+
+        <button 
+          onClick={() => setCurrentView('home')}
+          className="flex flex-col items-center gap-1 text-gray-400 -mt-6 relative z-10"
+        >
+           <div className="bg-[#111] w-12 h-12 rounded-full flex items-center justify-center border-4 border-[#F5F6F8] shadow-sm transform hover:scale-105 active:scale-95 transition-all">
+              <Home className="w-5 h-5 text-white" />
+           </div>
+        </button>
+
+        {user && user.email === 'admin@admin.com' && (
+          <button 
+            onClick={() => setTab('admin')}
+            className={cn("flex flex-col items-center gap-1", tab === 'admin' ? "text-[#111]" : "text-gray-400")}
+          >
+            <Shield className="w-5 h-5" />
+            <span className="text-[10px] font-bold">后台管理</span>
+          </button>
+        )}
+
+        {user && (
+          <button 
+            onClick={handleLogout}
+            className="flex flex-col items-center gap-1 text-gray-400"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="text-[10px] font-bold">退出登录</span>
+          </button>
+        )}
       </div>
 
       {/* Toast Notification */}
