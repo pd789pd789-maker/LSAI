@@ -101,6 +101,9 @@ const LocalUserMock = {
                         user.library.push(toPush);
                      }
                   }
+                  if (update.library !== undefined) {
+                     user.library = update.library;
+                  }
                   saveUsers(localUsers);
                 }
                 const result = user ? { ...user } : null;
@@ -128,6 +131,9 @@ const LocalUserMock = {
                } else {
                   user.library.push(toPush);
                }
+            }
+            if (update.library !== undefined) {
+               user.library = update.library;
             }
             saveUsers(localUsers);
           }
@@ -159,7 +165,7 @@ const userSchema = new Schema<IUser>({
   email: { type: String, required: true, unique: true },
   password: { type: String },
   points: { type: Number, default: 100 },
-  library: { type: [Schema.Types.Mixed], default: [] },
+  library: { type: Schema.Types.Mixed, default: [] },
   createdAt: { type: Date, default: Date.now }
 });
 

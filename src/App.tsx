@@ -71,11 +71,13 @@ export default function App() {
   }, [token]);
 
   const handleLogout = () => {
+    if (user) {
+        localStorage.removeItem(`LIFESTYLE_LIBRARY_${user.email}`);
+    }
     setToken(null);
     setUser(null);
     setLibrary([]);
     localStorage.removeItem("AUTH_TOKEN");
-    localStorage.removeItem("LIFESTYLE_LIBRARY");
     setCurrentView('home');
   };
 
@@ -107,13 +109,14 @@ export default function App() {
   const [library, setLibrary] = useState<ImageGroup[]>([]);
   
   useEffect(() => {
-    const saved = localStorage.getItem("LIFESTYLE_LIBRARY");
+    if (!user) return;
+    const saved = localStorage.getItem(`LIFESTYLE_LIBRARY_${user.email}`);
     if (saved) {
       try {
         setLibrary(JSON.parse(saved));
       } catch (e) {}
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (user && token) {
@@ -126,11 +129,13 @@ export default function App() {
                    for (const item of prev) m.set(item.id, item);
                    for (const item of data.library) m.set(item.id, item);
                    const merged = Array.from(m.values()).sort((a, b) => b.timestamp - a.timestamp);
-                   try { localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(merged)); } catch(e){}
+                   try { localStorage.setItem(`LIFESTYLE_LIBRARY_${user.email}`, JSON.stringify(merged)); } catch(e){}
                    return merged;
                });
             }
         }).catch(e => console.error(e));
+    } else if (!user) {
+        setLibrary([]);
     }
   }, [user, token]);
 
@@ -148,14 +153,16 @@ export default function App() {
   const addToLibrary = (group: ImageGroup) => {
     const newLib = [group, ...library];
     setLibrary(newLib);
-    try {
-      localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
-    } catch(e) {}
+    if (user) {
+      try {
+        localStorage.setItem(`LIFESTYLE_LIBRARY_${user.email}`, JSON.stringify(newLib));
+      } catch(e) {}
+    }
     syncLibraryToBackend(newLib);
   };
 
   const updateCurrentGroupInLibrary = (group: ImageGroup) => {
-    const safeGroup = { ...group, results: group.results.filter(Boolean) };
+    const safeGroup = { ...group, results: (group.results || []).filter(Boolean) };
     setLibrary(prev => {
       const idx = prev.findIndex(g => g.id === safeGroup.id);
       let newLib;
@@ -165,10 +172,12 @@ export default function App() {
       } else {
         newLib = [safeGroup, ...prev];
       }
-      try {
-        localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
-      } catch (e) {
-        console.warn("localStorage quota exceeded, unable to save to library");
+      if (user) {
+        try {
+          localStorage.setItem(`LIFESTYLE_LIBRARY_${user.email}`, JSON.stringify(newLib));
+        } catch (e) {
+          console.warn("localStorage quota exceeded, unable to save to library");
+        }
       }
       syncLibraryToBackend(newLib);
       return newLib;
@@ -178,18 +187,23 @@ export default function App() {
   const deleteGroup = (id: string) => {
     const newLib = library.filter(g => g.id !== id);
     setLibrary(newLib);
-    try {
-      localStorage.setItem("LIFESTYLE_LIBRARY", JSON.stringify(newLib));
-    } catch (e) {}
+    if (user) {
+      try {
+        localStorage.setItem(`LIFESTYLE_LIBRARY_${user.email}`, JSON.stringify(newLib));
+      } catch (e) {}
+    }
+    syncLibraryToBackend(newLib);
   };
 
   const downloadGroup = async (group: ImageGroup) => {
     const zip = new JSZip();
     const folder = zip.folder(`LIFESTYLE_${group.id.slice(0, 5)}`);
     if (!folder) return;
+    
+    const results = group.results || [];
 
-    for (let i = 0; i < group.results.length; i++) {
-      const imgUrl = group.results[i]?.imageUrl;
+    for (let i = 0; i < results.length; i++) {
+      const imgUrl = results[i]?.imageUrl;
       if (imgUrl) {
         try {
           const response = await fetch(imgUrl);
@@ -237,7 +251,8 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState("");
   const [previewState, setPreviewState] = useState<{ images: string[], index: number } | null>(null);
   
-  const openPreview = (results: any[], clickedIdx: number) => {
+  const openPreview = (resultsRaw: any[], clickedIdx: number) => {
+    const results = resultsRaw || [];
     const validImages: string[] = [];
     let targetIndex = 0;
     for (let i = 0; i < results.length; i++) {
@@ -1050,7 +1065,7 @@ export default function App() {
                             onClick={() => downloadGroup(group)}
                             className="flex-1 lg:flex-none flex justify-center items-center gap-2 bg-[#111] hover:bg-gray-800 text-white px-4 py-2.5 rounded-xl text-xs font-semibold transition shadow-md"
                           >
-                            <Download className="w-3.5 h-3.5" /> 典藏本辑 ({group.results.length}P)
+                            <Download className="w-3.5 h-3.5" /> 典藏本辑 ({(group.results || []).length}P)
                           </button>
                           <button 
                             onClick={() => deleteGroup(group.id)}
@@ -1064,7 +1079,7 @@ export default function App() {
 
                       {/* Display Grid */}
                       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-5">
-                        {group.results.map((img, i) => (
+                        {(group.results || []).map((img, i) => (
                           <div key={i} className="group relative rounded-xl overflow-hidden border border-gray-100 aspect-[3/4] shadow-sm">
                              {img.error ? (
                                <div className="w-full h-full bg-red-50 flex flex-col items-center justify-center p-4 text-center">
